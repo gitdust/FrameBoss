@@ -1,0 +1,59 @@
+------------------------------------------------------------------------
+r1412 | funkehdude | 2026-09-08 01:02:22 +0000 (Tue, 08 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/Ace3.toc
+
+Bump toc
+------------------------------------------------------------------------
+r1411 | funkehdude | 2026-09-06 22:47:39 +0000 (Sun, 06 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceGUI-3.0/widgets/AceGUIWidget-Icon.lua
+   M /trunk/AceGUI-3.0/widgets/AceGUIWidget-Label.lua
+
+AceGUI-3.0: Forgot to bump versions.
+------------------------------------------------------------------------
+r1410 | funkehdude | 2026-09-06 22:45:42 +0000 (Sun, 06 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceGUI-3.0/widgets/AceGUIWidget-Icon.lua
+   M /trunk/AceGUI-3.0/widgets/AceGUIWidget-Label.lua
+
+AceGUI-3.0: Add `:SetImageByAtlas` API to the `AceGUIWidget-Icon` and `AceGUIWidget-Label` widgets.
+------------------------------------------------------------------------
+r1409 | funkehdude | 2026-09-03 22:41:24 +0000 (Thu, 03 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceConfig-3.0/AceConfigDialog-3.0/AceConfigDialog-3.0.lua
+
+AceConfig-3.0/AceConfigDialog-3.0: Slightly bigger popup size.
+------------------------------------------------------------------------
+r1408 | funkehdude | 2026-09-03 15:37:56 +0000 (Thu, 03 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceDBOptions-3.0/AceDBOptions-3.0.lua
+
+AceDBOptions-3.0: Increase the character limit to 50, increase the width of the dropdown so that a 50 character profile should always show.
+------------------------------------------------------------------------
+r1407 | funkehdude | 2026-09-03 15:26:34 +0000 (Thu, 03 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceDB-3.0/AceDB-3.0.lua
+
+AceDB-3.0: Bump limit to 50 characters
+------------------------------------------------------------------------
+r1406 | funkehdude | 2026-09-03 04:12:17 +0000 (Thu, 03 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/AceDB-3.0/AceDB-3.0.lua
+
+AceDB-3.0: Restrict profile names to between 1 and 30 characters. Existing profiles remain and can be copied to a new name.
+------------------------------------------------------------------------
+r1405 | funkehdude | 2026-09-03 02:03:09 +0000 (Thu, 03 Sep 2026) | 1 line
+Changed paths:
+   M /trunk/.luacheckrc
+   M /trunk/AceDBOptions-3.0/AceDBOptions-3.0.lua
+
+AceDBOptions-3.0: Validate new profile names (Restrict to 30 characters, must contain some text)
+------------------------------------------------------------------------
+r1404 | funkehdude | 2026-08-26 22:31:26 +0000 (Wed, 26 Aug 2026) | 1 line
+Changed paths:
+   M /trunk/AceGUI-3.0/widgets/AceGUIWidget-Heading.lua
+
+AceGUI-3.0/widgets/AceGUIWidget-Heading: Support secret text
+------------------------------------------------------------------------
+
