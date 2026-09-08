@@ -9,6 +9,8 @@ local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
 local Auras = {}
 FrameBoss.Auras = Auras
 
+local GetSpellTexture = C_Spell.GetSpellTexture  -- 11.0 起全局 GetSpellTexture 已移除
+
 local MAX_ICONS_SIDE = 8
 local GAP = 8
 
@@ -73,7 +75,7 @@ local function FillIcon(b, unit, data, isBuff, color)
     b.isBuff = isBuff
     b.icon:SetTexture(data.icon)
     local apps = data.applications or 0
-    b.count:SetText(apps > 1 and apps or "")
+    b.count:SetText(apps > 1 and apps or "")  -- SetText 传 nil 会报 usage 错误，空串清空
     if data.duration and data.duration > 0 then
         b.cooldown:SetCooldown(data.expirationTime - data.duration, data.duration)
         b.cooldown:Show()
@@ -176,5 +178,6 @@ function Auras.ShowTest(f)
     local enrage = fake(GetSpellTexture(6673), 3, 0, 0)      -- 战斗怒吼图标，模拟可驱散
     enrage.dispelName = ""
     local myDebuff = fake(GetSpellTexture(589), 5, 30, GetTime() + 22)  -- 暗言术：痛图标
+    myDebuff.dispelName = "Magic"
     Auras.Layout(f, "player", { stealable, enrage }, { myDebuff })
 end

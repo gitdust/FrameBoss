@@ -102,6 +102,6 @@ function FrameBoss:ChatCommand(input)
     if cmd == "test" then
         self:SetTestMode(not self.db.profile.testMode)
     else
-        LibStub("AceConfigDialog-3.0"):Open("FrameBoss")
+        AceConfigDialog:Open("FrameBoss")
     end
 end
