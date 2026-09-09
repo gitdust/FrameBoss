@@ -1,8 +1,8 @@
 --[[
     FrameBoss - Core.lua
-    Minimalist boss frames: name / large health bar / power bar / important
-    buffs / player debuffs (no portrait, no backdrop).
-    Pure Blizzard native API + Ace3 scaffolding; layout is a strict 8px grid.
+    Minimalist boss frames: portrait / name / large health bar / power bar /
+    important buffs / player debuffs (no frame backdrop).
+    Pure Blizzard native API + Ace3 scaffolding; elements are flush (0 gap).
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):NewAddon("FrameBoss", "AceEvent-3.0", "AceConsole-3.0")
@@ -29,13 +29,14 @@ local FRAME_H_NP = HEALTH_H                         -- 32 (no power bar)
 local BAR_X      = PORTRAIT_W                       -- 56
 local BAR_W      = FRAME_W - PORTRAIT_W             -- 184
 local GAP        = 0                                -- 0 (elements all flush)
-local AURA_ROW_H = 20                               -- 20 (height of the aura row placeholder; equals largest icon)
+local AURA_ROW_H = 28                               -- 28 (height of the aura row placeholder; equals largest icon)
 local MAX_BOSS   = 5
 
 -- Native-style status bar texture (Blizzard's built-in glossy bar).
 local BAR_TEX    = "Interface\\TargetingFrame\\UI-StatusBar"
 
-FrameBoss.FRAME_W = FRAME_W
+FrameBoss.FRAME_W    = FRAME_W
+FrameBoss.PORTRAIT_W = PORTRAIT_W
 
 local DEFAULT_POINT = { "TOPLEFT", "UIParent", "TOPLEFT", 400, -300 }
 
@@ -242,15 +243,14 @@ function FrameBoss:CreateFrames()
         f.bossIndex = i
         f.unit = "boss" .. i
 
-        -- Square portrait (fixed 56x56).
+        -- Portrait (56x56): the client renders portraits as a circle with
+        -- black corners; mask the corners to alpha so the portrait shows
+        -- directly on a transparent background. No backdrop, no border.
         f.portrait = f:CreateTexture(nil, "ARTWORK")
         f.portrait:SetSize(PORTRAIT_W, PORTRAIT_H)
         f.portrait:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
-        f.portrait:SetTexCoord(0.05, 0.95, 0.08, 0.92)
-        local pborder = CreateFrame("Frame", nil, f, "BackdropTemplate")
-        pborder:SetAllPoints(f.portrait)
-        pborder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-        pborder:SetBackdropBorderColor(0, 0, 0, 1)
+        f.portrait:SetTexCoord(0, 1, 0, 1)
+        f.portrait:SetMask("Interface\\CharacterFrame\\TempPortraitAlphaMask")
 
         -- Large health bar (height 32, flush against the top).
         f.health = CreateFrame("StatusBar", nil, f)

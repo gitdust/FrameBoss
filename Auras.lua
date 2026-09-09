@@ -11,9 +11,11 @@
 
     Three containers per boss frame (current client uses the Flow layout API,
     modelled after DBM AuraTracking):
-      Buff-Special container (left): HELPFUL and stealable / dispel (enrage)  20x20
-      Buff-Regular container (mid-left): HELPFUL ordinary buffs              16x16
-      Debuff container (right): HARMFUL|PLAYER -- only player (incl. pet/vehicle) applied  16x16
+      Buff-Special container (left): HELPFUL and stealable / dispel (enrage)  28x28
+      Buff-Regular container (mid-left): HELPFUL ordinary buffs              24x24
+      Debuff container (right): HARMFUL|PLAYER -- only player (incl. pet/vehicle) applied  24x24
+    Buffs start at the portrait's right edge (x = portrait width), aligned
+    with the health/power bars.
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
@@ -22,13 +24,19 @@ FrameBoss.Auras = Auras
 
 local GetSpellTexture = C_Spell.GetSpellTexture  -- global GetSpellTexture was removed as of 11.0
 
-local FRAME_W = FrameBoss.FRAME_W
+local FRAME_W    = FrameBoss.FRAME_W
+local PORTRAIT_W = FrameBoss.PORTRAIT_W
 local GAP = 0  -- icons hug each other; the aura row hugs the frame
 
 -- Aura group sizes: dispel/stealable are larger, ordinary auras are smaller.
-local SIZE_BUFF_SPECIAL = 20  -- stealable / enrage
-local SIZE_BUFF_REGULAR = 16  -- ordinary HELPFUL
-local SIZE_DEBUFF       = 16  -- player-applied HARMFUL
+local SIZE_BUFF_SPECIAL = 28  -- stealable / enrage
+local SIZE_BUFF_REGULAR = 24  -- ordinary HELPFUL
+local SIZE_DEBUFF       = 24  -- player-applied HARMFUL
+
+-- Buffs begin where the portrait ends / the bars begin; buffs and debuffs
+-- split the bar-width area evenly.
+local AURA_X = PORTRAIT_W
+local SIDE_W = math.floor((FRAME_W - PORTRAIT_W) / 2)
 
 local DEBUFF_FILTER = "HARMFUL|PLAYER"
 
@@ -47,14 +55,12 @@ local SortDir      = (AuraContainerSortDirection and AuraContainerSortDirection.
 local FlowDir      = AnchorUtil.FlowDirection    -- .Right / .Left / .Down
 local FlowAxisH    = AnchorUtil.FlowLayoutAxis.Horizontal
 
--- Container width = available width of the aura row (left half / right half).
-local CONTAINER_W = math.floor(FRAME_W / 2) - GAP
--- Max icon count per side (computed from the configured size).
-local function MaxPerSide(size)
-    return math.max(1, math.floor((CONTAINER_W + GAP) / (size + GAP)))
+-- Max icon count per side (computed from the configured size and side width).
+local function MaxPerSide(size, width)
+    return math.max(1, math.floor((width + GAP) / (size + GAP)))
 end
-local function LineSize(size)
-    local n = MaxPerSide(size)
+local function LineSize(size, width)
+    local n = MaxPerSide(size, width)
     return size * n + GAP * (n - 1)
 end
 
@@ -108,9 +114,9 @@ local function InitializeButton(container, size)
     end
 end
 
-local function GroupOptions(container, size, candidate)
+local function GroupOptions(container, size, width, candidate)
     return {
-        maxFrameCount = MaxPerSide(size),
+        maxFrameCount = MaxPerSide(size, width),
         sortMethod = SortMethod,
         sortDirection = SortDir,
         initializeFrame = InitializeButton(container, size),
@@ -124,9 +130,10 @@ local function GroupOptions(container, size, candidate)
     }
 end
 
--- Container construction (inAuraRow = left-edge anchor; iconFromRight = grow
--- toward the left when this is a debuff container).
-local function BuildContainer(f, anchor, relAnchor, growH, size)
+-- Container construction (anchor/relAnchor pick the row edge; growH is the
+-- horizontal growth direction; xOff shifts the anchor, e.g. AURA_X to start
+-- past the portrait).
+local function BuildContainer(f, anchor, relAnchor, growH, size, width, xOff)
     if InCombatLockdown() then return nil end  -- protected in combat; rebuilt after combat ends
     EnsureAuraLib()
 
@@ -140,21 +147,21 @@ local function BuildContainer(f, anchor, relAnchor, growH, size)
     c:SetEnabled(false)
     c:Hide()
     c:ClearAllPoints()
-    c:SetPoint(anchor, f, relAnchor, 0, -GAP)
+    c:SetPoint(anchor, f, relAnchor, xOff or 0, -GAP)
     c:SetSize(size, size)  -- container does not clip child frames; icons may extend outward
     c:SetFlowLayoutAxis(FlowAxisH)
     c:SetFlowLayoutAnchorPoint(anchor)
     c:SetFlowLayoutGrowthDirection(growH, FlowDir.Down)
-    c:SetFlowLayoutMaximumLineSize(LineSize(size))
+    c:SetFlowLayoutMaximumLineSize(LineSize(size, width))
     return c
 end
 
-local function AddGroup(c, key, filter, candidate, size)
+local function AddGroup(c, key, filter, candidate, size, width)
     if not c:HasAuraGroup(key) then
-        c:AddAuraGroup(key, filter, GroupOptions(c, size, candidate))
+        c:AddAuraGroup(key, filter, GroupOptions(c, size, width, candidate))
         c.groupKeys[#c.groupKeys + 1] = key
     end
-    c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
+    c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size, width))
     if candidate then c:SetAuraGroupCandidateFilters(key, candidate) end
     -- Explicit layout call to ensure the Flow API takes effect.
     c:SetAuraGroupLayout(key, {
@@ -169,7 +176,7 @@ end
 -- API or combat protection won't break the addon.
 local function SetupContainer(f, c, groups)
     for _, g in ipairs(groups) do
-        AddGroup(c, g.key, g.filter, g.candidate, g.size)
+        AddGroup(c, g.key, g.filter, g.candidate, g.size, g.width)
     end
 end
 
@@ -178,23 +185,24 @@ end
 function Auras.CreateContainers(f)
     if not f then return false end
     if not f.buffSpecial then
-        -- Stealable + Enrage (dispel) 20x20, anchored to the left, grows right.
-        local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_SPECIAL)
+        -- Stealable + Enrage (dispel) 28x28, starts at the portrait's right
+        -- edge (aligned with the bars), grows right.
+        local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_SPECIAL, SIDE_W, AURA_X)
         if ok and c then
             pcall(SetupContainer, f, c, {
-                { key = f.unit .. "Stealable", filter = "HELPFUL", candidate = { isStealable = true }, size = SIZE_BUFF_SPECIAL },
-                { key = f.unit .. "Enrage",    filter = "HELPFUL", candidate = { includeDispelTypes = { Enrage = true } }, size = SIZE_BUFF_SPECIAL },
+                { key = f.unit .. "Stealable", filter = "HELPFUL", candidate = { isStealable = true }, size = SIZE_BUFF_SPECIAL, width = SIDE_W },
+                { key = f.unit .. "Enrage",    filter = "HELPFUL", candidate = { includeDispelTypes = { Enrage = true } }, size = SIZE_BUFF_SPECIAL, width = SIDE_W },
             })
             f.buffSpecial = c
         end
     end
     if not f.buffRegular then
-        -- Ordinary HELPFUL buff 16x16, anchored to the right of buffSpecial.
+        -- Ordinary HELPFUL buff 24x24, chained to the right of buffSpecial.
         if not InCombatLockdown() and f.buffSpecial then
-            local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_REGULAR)
+            local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_REGULAR, SIDE_W)
             if ok and c then
                 pcall(SetupContainer, f, c, {
-                    { key = f.unit .. "Regular", filter = "HELPFUL", candidate = nil, size = SIZE_BUFF_REGULAR },
+                    { key = f.unit .. "Regular", filter = "HELPFUL", candidate = nil, size = SIZE_BUFF_REGULAR, width = SIDE_W },
                 })
                 -- Re-anchor to the right side of buffSpecial.
                 c:ClearAllPoints()
@@ -204,11 +212,11 @@ function Auras.CreateContainers(f)
         end
     end
     if not f.debuffContainer then
-        -- Player-applied HARMFUL debuff 16x16, anchored to the right, grows left.
-        local ok, c = pcall(BuildContainer, f, "TOPRIGHT", "BOTTOMRIGHT", FlowDir.Left, SIZE_DEBUFF)
+        -- Player-applied HARMFUL debuff 24x24, anchored to the right, grows left.
+        local ok, c = pcall(BuildContainer, f, "TOPRIGHT", "BOTTOMRIGHT", FlowDir.Left, SIZE_DEBUFF, SIDE_W)
         if ok and c then
             pcall(SetupContainer, f, c, {
-                { key = f.unit .. "Debuff", filter = DEBUFF_FILTER, candidate = nil, size = SIZE_DEBUFF },
+                { key = f.unit .. "Debuff", filter = DEBUFF_FILTER, candidate = nil, size = SIZE_DEBUFF, width = SIDE_W },
             })
             f.debuffContainer = c
         end
@@ -241,17 +249,17 @@ end
 function Auras.ApplySize(f)
     if not f or not f.buffSpecial then return end
     for _, entry in ipairs({
-        { c = f.buffSpecial,   size = SIZE_BUFF_SPECIAL },
-        { c = f.buffRegular,   size = SIZE_BUFF_REGULAR },
-        { c = f.debuffContainer, size = SIZE_DEBUFF },
+        { c = f.buffSpecial,     size = SIZE_BUFF_SPECIAL, width = SIDE_W },
+        { c = f.buffRegular,     size = SIZE_BUFF_REGULAR, width = SIDE_W },
+        { c = f.debuffContainer, size = SIZE_DEBUFF,       width = SIDE_W },
     }) do
-        local c, size = entry.c, entry.size
+        local c, size, width = entry.c, entry.size, entry.width
         if c then
             c.currentSize = size
             c:SetSize(size, size)
-            c:SetFlowLayoutMaximumLineSize(LineSize(size))
+            c:SetFlowLayoutMaximumLineSize(LineSize(size, width))
             for _, key in ipairs(c.groupKeys) do
-                c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
+                c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size, width))
                 c:SetAuraGroupLayout(key, {
                     elementWidth = size,
                     elementHeight = size,
@@ -329,17 +337,17 @@ function Auras.ShowTest(f)
     end
     local b1, b2, b3, b4 = row.buttons[1], row.buttons[2], row.buttons[3], row.buttons[4]
 
-    -- b1: stealable (20x20, left edge)
+    -- b1: stealable (28x28, starts at the portrait's right edge)
     b1:SetSize(szSpec, szSpec)
     b1:ClearAllPoints()
-    b1:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+    b1:SetPoint("TOPLEFT", row, "TOPLEFT", AURA_X, 0)
     b1.icon:SetTexture(GetSpellTexture(118))    -- Polymorph icon, mock stealable
     b1.count:SetText("")
     b1.border:SetVertexColor(unpack(COLOR_STEALABLE))
     b1.cooldown:Hide()
     b1:Show()
 
-    -- b2: enrage / dispel (20x20, flush right of b1)
+    -- b2: enrage / dispel (28x28, flush right of b1)
     b2:SetSize(szSpec, szSpec)
     b2:ClearAllPoints()
     b2:SetPoint("TOPLEFT", b1, "TOPRIGHT", GAP, 0)
@@ -349,7 +357,7 @@ function Auras.ShowTest(f)
     b2.cooldown:Hide()
     b2:Show()
 
-    -- b3: ordinary HELPFUL (16x16, flush right of b2)
+    -- b3: ordinary HELPFUL (24x24, flush right of b2)
     b3:SetSize(szReg, szReg)
     b3:ClearAllPoints()
     b3:SetPoint("TOPLEFT", b2, "TOPRIGHT", GAP, 0)
@@ -359,7 +367,7 @@ function Auras.ShowTest(f)
     b3.cooldown:Hide()
     b3:Show()
 
-    -- b4: player debuff (16x16, right edge)
+    -- b4: player debuff (24x24, right edge)
     b4:SetSize(szDebuf, szDebuf)
     b4:ClearAllPoints()
     b4:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)

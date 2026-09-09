@@ -77,6 +77,44 @@ function FrameBoss:SetupOptions()
     AceConfig:RegisterOptionsTable("FrameBoss", options)
     AceConfigDialog:AddToBlizOptions("FrameBoss", "FrameBoss")
 
+    -- Closing the options UI (Close button / X / Escape) automatically exits
+    -- edit/test ("debug") mode.
+    local function ExitEditModeIfActive()
+        local p = FrameBoss.db and FrameBoss.db.profile
+        if p and p.editMode then
+            FrameBoss:SetEditMode(false)
+        end
+    end
+
+    -- Standalone AceGUI window opened by /fb: hook the underlying frame's
+    -- OnHide (fires for the Close button, Escape, and programmatic close).
+    -- The widget is recreated on every Open, so re-hook via Open hook.
+    hooksecurefunc(AceConfigDialog, "Open", function(_, appName)
+        if appName ~= "FrameBoss" then return end
+        local widget = AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames[appName]
+        local frame = widget and widget.frame
+        if frame and not frame.frameBossCloseHooked then
+            frame.frameBossCloseHooked = true
+            frame:HookScript("OnHide", ExitEditModeIfActive)
+        end
+    end)
+
+    -- Blizzard Settings panel (the category added by AddToBlizOptions);
+    -- Blizzard_Settings is load-on-demand, hook as soon as it exists.
+    local function HookBlizzardSettings()
+        local panel = _G.SettingsPanel
+        if panel and not panel.frameBossCloseHooked then
+            panel.frameBossCloseHooked = true
+            panel:HookScript("OnHide", ExitEditModeIfActive)
+        end
+    end
+    HookBlizzardSettings()
+    local settingsWatcher = CreateFrame("Frame")
+    settingsWatcher:RegisterEvent("ADDON_LOADED")
+    settingsWatcher:SetScript("OnEvent", function(_, _, addonName)
+        if addonName == "Blizzard_Settings" then HookBlizzardSettings() end
+    end)
+
     self:RegisterChatCommand("fb", "ChatCommand")
     self:RegisterChatCommand("frameboss", "ChatCommand")
 end
