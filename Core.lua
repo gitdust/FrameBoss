@@ -12,17 +12,18 @@ _G.FrameBoss = FrameBoss
 -- 只能原样传给 StatusBar 等引擎 API；需要显示百分比时用 UnitHealthPercent/UnitPowerPercent。
 local isSecret = issecretvalue or function() return false end
 
--- 布局常量（内容紧贴，无内边距；头像为矩形，占满整高）
+-- 布局常量（内容紧贴，无内边距；头像 56×56 矩形，血条与能量条在头像右侧）
 local FRAME_W    = 240
 local PORTRAIT_W = 56
-local NAME_H     = 12
-local HEALTH_H   = 20
-local POWER_H    = 10
-local FRAME_H    = NAME_H + HEALTH_H + POWER_H  -- 42
-local FRAME_H_NP = NAME_H + HEALTH_H            -- 32（无能量条）
-local BAR_X      = PORTRAIT_W                   -- 56
-local BAR_W      = FRAME_W - PORTRAIT_W         -- 184
-local GAP        = 0                            -- 元素全部紧贴
+local PORTRAIT_H = 56
+local HEALTH_H   = 32
+local POWER_H    = 24
+local FRAME_H    = PORTRAIT_H                       -- 56（有能量条时与头像等高）
+local FRAME_H_NP = HEALTH_H                         -- 32（无能量条）
+local BAR_X      = PORTRAIT_W                       -- 56
+local BAR_W      = FRAME_W - PORTRAIT_W             -- 184
+local GAP        = 0                                -- 元素全部紧贴
+local AURA_ROW_H = 20                               -- 光环行占位高（取最大图标 20）
 local MAX_BOSS   = 5
 
 -- 原生风格状态条材质（暴雪自带的光泽状态条）
@@ -35,11 +36,11 @@ local DEFAULT_POINT = { "TOPLEFT", "UIParent", "TOPLEFT", 400, -300 }
 local defaults = {
     profile = {
         scale       = 1.0,
-        auraSize    = 32,
         showPower   = true,
         healthColor = { 0.9, 0.2, 0.2 },
         locked      = true,
         testMode    = false,
+        editMode    = false,
         point       = { unpack(DEFAULT_POINT) },
     },
 }
@@ -65,6 +66,15 @@ function FrameBoss:OnEnable()
     self:CreateFrames()
     self:ApplySettings()
     self:RegisterEvents()
+end
+
+function FrameBoss:OnDisable()
+    -- 关闭插件：自动退出测试模式，下次加载保持干净状态
+    if self.db and self.db.profile then
+        self.db.profile.editMode = false
+        self.db.profile.testMode = false
+        self.db.profile.locked = true
+    end
 end
 
 -- 禁用原生首领框体 ---------------------------------------------------------
@@ -186,12 +196,12 @@ end
 function FrameBoss:ApplyMover()
     local db = self.db.profile
     local mover = self.mover
-    local stackH = MAX_BOSS * FRAME_H + (2 * MAX_BOSS - 1) * GAP + MAX_BOSS * db.auraSize
+    local stackH = MAX_BOSS * FRAME_H + (2 * MAX_BOSS - 1) * GAP + MAX_BOSS * AURA_ROW_H
     mover:SetSize(FRAME_W, stackH)
     mover:ClearAllPoints()
     mover:SetPoint(unpack(db.point))
     mover:SetScale(db.scale)
-    local active = db.testMode or not db.locked
+    local active = db.editMode
     mover:EnableMouse(active)
     mover:SetMovable(active)
     if active then
@@ -212,7 +222,7 @@ end
 function FrameBoss:CreateFrames()
     self.frames = {}
     for i = 1, MAX_BOSS do
-        -- 无底版框体；矩形头像在左占满整高，右侧名称/血条/能量条紧贴排列
+        -- 无底版框体；矩形头像在左 56×56，右侧血条/能量条紧贴排列
         local f = CreateFrame("Frame", nil, self.mover)
         f:SetSize(FRAME_W, FRAME_H)
         if i == 1 then
@@ -223,43 +233,44 @@ function FrameBoss:CreateFrames()
         f.bossIndex = i
         f.unit = "boss" .. i
 
-        -- 矩形头像（宽 56，高度跟随框体 42/32）
+        -- 矩形头像（固定 56×56）
         f.portrait = f:CreateTexture(nil, "ARTWORK")
-        f.portrait:SetWidth(PORTRAIT_W)
+        f.portrait:SetSize(PORTRAIT_W, PORTRAIT_H)
         f.portrait:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
-        f.portrait:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 0, 0)
         f.portrait:SetTexCoord(0.05, 0.95, 0.08, 0.92)
         local pborder = CreateFrame("Frame", nil, f, "BackdropTemplate")
         pborder:SetAllPoints(f.portrait)
         pborder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
         pborder:SetBackdropBorderColor(0, 0, 0, 1)
 
-        -- 名称（紧贴顶部）
-        f.name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        f.name:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, 0)
-        f.name:SetSize(BAR_W - 52, NAME_H)
-        f.name:SetJustifyH("LEFT")
-        f.name:SetJustifyV("MIDDLE")
-        f.name:SetWordWrap(false)
-
-        -- 血量百分比（名称行右侧）
-        f.percent = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        f.percent:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
-        f.percent:SetSize(48, NAME_H)
-        f.percent:SetJustifyH("RIGHT")
-        f.percent:SetJustifyV("MIDDLE")
-
-        -- 大血条（高 20，紧贴名称行）
+        -- 大血条（高 32，紧贴头部）
         f.health = CreateFrame("StatusBar", nil, f)
         f.health:SetSize(BAR_W, HEALTH_H)
-        f.health:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, -NAME_H)
+        f.health:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, 0)
         f.health:SetStatusBarTexture(BAR_TEX)
         local hbg = f.health:CreateTexture(nil, "BACKGROUND")
         hbg:SetAllPoints()
         hbg:SetTexture(BAR_TEX)
         hbg:SetVertexColor(0.12, 0.04, 0.04)
 
-        -- 能量条（高 10，紧贴血条下方）
+        -- 名称（血条内左侧，垂直居中）
+        f.name = f.health:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        f.name:SetPoint("LEFT", f.health, "LEFT", 4, 0)
+        f.name:SetPoint("RIGHT", f.health, "CENTER", -4, 0)
+        f.name:SetHeight(HEALTH_H)
+        f.name:SetJustifyH("LEFT")
+        f.name:SetJustifyV("MIDDLE")
+        f.name:SetWordWrap(false)
+
+        -- 血量百分比（血条内右侧，垂直居中，保留 2 位小数）
+        f.percent = f.health:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        f.percent:SetPoint("LEFT", f.health, "CENTER", 4, 0)
+        f.percent:SetPoint("RIGHT", f.health, "RIGHT", -4, 0)
+        f.percent:SetHeight(HEALTH_H)
+        f.percent:SetJustifyH("RIGHT")
+        f.percent:SetJustifyV("MIDDLE")
+
+        -- 能量条（高 24，紧贴血条下方）
         f.power = CreateFrame("StatusBar", nil, f)
         f.power:SetSize(BAR_W, POWER_H)
         f.power:SetPoint("TOPLEFT", f.health, "BOTTOMLEFT", 0, 0)
@@ -272,7 +283,7 @@ function FrameBoss:CreateFrames()
         -- 光环行占位（紧贴框体下方；本身不渲染，只用于框体间距布局，
         -- 实际图标由 Auras.lua 的原生 AuraContainer 承载）
         local row = CreateFrame("Frame", nil, f)
-        row:SetSize(FRAME_W, self.db.profile.auraSize)
+        row:SetSize(FRAME_W, AURA_ROW_H)
         row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -GAP)
         f.auraRow = row
 
@@ -306,7 +317,7 @@ function FrameBoss:UpdateHealth(f, unit)
 
     -- 百分比：UnitHealthPercent 对副本内首领也可能返回 secret。
     -- secret 只能穿过 string.format 这类 C 函数（产出 secret 字符串，SetText 接受），
-    -- 绝不能做 Lua 算术（+/math.floor）或 .. 拼接。写法同 oUF perhp 标签。
+    -- 绝不能做 Lua 算术（+/math.floor）或 .. 拼接。保留 2 位小数。
     if not UnitIsConnected(unit) then
         f.percent:SetText("离线")
     elseif UnitIsDeadOrGhost(unit) then
@@ -319,9 +330,9 @@ function FrameBoss:UpdateHealth(f, unit)
         if pct == nil then
             f.percent:SetText("")
         elseif isSecret(pct) then
-            f.percent:SetText(string.format("%.0f%%", pct))
+            f.percent:SetText(string.format("%.2f%%", pct))
         else
-            f.percent:SetText(math.floor((tonumber(pct) or 0) + 0.5) .. "%")
+            f.percent:SetText(string.format("%.2f%%", tonumber(pct) or 0))
         end
     end
 end
@@ -371,7 +382,7 @@ function FrameBoss:RefreshAll()
             f:Hide()
         end
     end
-    if not db.locked then anyShown = true end
+    if db.editMode then anyShown = true end
     self.mover:SetShown(anyShown)
     self:ApplyMover()
 end
@@ -385,8 +396,12 @@ function FrameBoss:ApplySettings()
     self:RefreshAll()
 end
 
-function FrameBoss:SetTestMode(v)
-    self.db.profile.testMode = v
+function FrameBoss:SetEditMode(v)
+    -- 编辑模式 = 解锁拖动 + 显示测试框体；关闭时自动退出测试模式
+    local db = self.db.profile
+    db.editMode = v
+    db.locked = not v
+    db.testMode = v
     self:RefreshAll()
 end
 
@@ -403,7 +418,7 @@ function FrameBoss:FillTestFrame(f, i)
     local hp = 90 - i * 10
     f.health:SetMinMaxValues(0, 100)
     f.health:SetValue(hp)
-    f.percent:SetText(hp .. "%")
+    f.percent:SetText(string.format("%.2f%%", hp))
     if self.db.profile.showPower then
         f.power:Show()
         f:SetHeight(FRAME_H)

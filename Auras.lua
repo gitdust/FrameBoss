@@ -6,9 +6,10 @@
     加载的 Blizzard_AuraContainer 插件里）：引擎在安全上下文内部枚举光环，
     secret 单位也能正常显示，并自动处理刷新、冷却扫秒、层数、类型边框和 Tooltip。
 
-    每个首领框两个容器（当前客户端为 Flow 布局 API，参考 DBM AuraTracking）：
-      Buff   容器：HELPFUL + 候选 isStealable / Enrage —— 可偷取或可进攻驱散（激怒）
-      Debuff 容器：HARMFUL|PLAYER                      —— 仅玩家（含宠物/载具）施加
+    每个首领框三个容器（当前客户端为 Flow 布局 API，参考 DBM AuraTracking）：
+      Buff-Special 容器（左侧）：HELPFUL 且可偷取 / 可驱散（激怒）  20×20
+      Buff-Regular 容器（中左）：HELPFUL 普通增益                    16×16
+      Debuff        容器（右侧）：HARMFUL|PLAYER —— 仅玩家（含宠物/载具）施加  16×16
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
@@ -19,6 +20,11 @@ local GetSpellTexture = C_Spell.GetSpellTexture  -- 11.0 起全局 GetSpellTextu
 
 local FRAME_W = FrameBoss.FRAME_W
 local GAP = 0  -- 图标紧贴，光环行紧贴框体
+
+-- 光环组尺寸（用户指定：可驱散/可偷取放大，普通光环缩小）
+local SIZE_BUFF_SPECIAL = 20  -- 可偷取 / 激怒
+local SIZE_BUFF_REGULAR = 16  -- 普通 HELPFUL
+local SIZE_DEBUFF       = 16  -- 玩家施加的 HARMFUL
 
 local DEBUFF_FILTER = "HARMFUL|PLAYER"
 
@@ -37,9 +43,11 @@ local SortDir      = (AuraContainerSortDirection and AuraContainerSortDirection.
 local FlowDir      = AnchorUtil.FlowDirection    -- .Right / .Left / .Down
 local FlowAxisH    = AnchorUtil.FlowLayoutAxis.Horizontal
 
--- 每侧各占框体一半宽，图标间留 GAP；返回每侧最大个数与像素行宽
+-- 容器宽 = 光环行可用宽度（左半帧 / 右半帧）
+local CONTAINER_W = math.floor(FRAME_W / 2) - GAP
+-- 每侧最多图标数（按指定 size 计算）
 local function MaxPerSide(size)
-    return math.max(1, math.floor((FRAME_W / 2 + GAP) / (size + GAP)))
+    return math.max(1, math.floor((CONTAINER_W + GAP) / (size + GAP)))
 end
 local function LineSize(size)
     local n = MaxPerSide(size)
@@ -58,10 +66,10 @@ retryFrame:SetScript("OnEvent", function()
     if any and FrameBoss.frames then FrameBoss:RefreshAll() end
 end)
 
--- 按钮初始化（引擎创建新按钮时回调），参考 DBM ConfigureButton
-local function InitializeButton(container)
+-- 按钮初始化（引擎创建新按钮时回调）
+-- 容器为单一 size 时直接用；混合 size 容器使用传入的 size 闭包
+local function InitializeButton(container, size)
     return function(button)
-        local size = container.currentSize
         button:SetSize(size, size)
         button:SetMouseMotionEnabled(true)
 
@@ -99,7 +107,7 @@ local function GroupOptions(container, size, candidate)
         maxFrameCount = MaxPerSide(size),
         sortMethod = SortMethod,
         sortDirection = SortDir,
-        initializeFrame = InitializeButton(container),
+        initializeFrame = InitializeButton(container, size),
         candidateFilters = candidate,
         layout = {
             elementWidth = size,
@@ -110,22 +118,17 @@ local function GroupOptions(container, size, candidate)
     }
 end
 
--- fromRight=false：左侧 buff，向右生长；true：右侧 debuff，向左生长
-local function BuildContainer(f, fromRight)
+-- 容器构造（inAuraRow=左侧起点；iconFromRight=debuff 时反向生长）
+local function BuildContainer(f, anchor, relAnchor, growH, size)
     if InCombatLockdown() then return nil end  -- 战斗中创建受保护，等脱战补建
     EnsureAuraLib()
 
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, f, "CustomAuraContainerTemplate")
     if not ok or not c then return nil end
 
-    local size = profile().auraSize
     c.buttons = {}
     c.currentSize = size
     c.groupKeys = {}
-
-    local anchor    = fromRight and "TOPRIGHT" or "TOPLEFT"
-    local relAnchor = fromRight and "BOTTOMRIGHT" or "BOTTOMLEFT"
-    local growH     = fromRight and FlowDir.Left or FlowDir.Right
 
     c:SetEnabled(false)
     c:Hide()
@@ -139,44 +142,69 @@ local function BuildContainer(f, fromRight)
     return c
 end
 
-local function AddGroup(c, key, filter, candidate)
+local function AddGroup(c, key, filter, candidate, size)
     if not c:HasAuraGroup(key) then
-        c:AddAuraGroup(key, filter, GroupOptions(c, c.currentSize, candidate))
+        c:AddAuraGroup(key, filter, GroupOptions(c, size, candidate))
         c.groupKeys[#c.groupKeys + 1] = key
     end
-    -- 显式设置，确保 Flow API 下生效
-    c:SetAuraGroupMaxFrameCount(key, MaxPerSide(c.currentSize))
+    c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
     if candidate then c:SetAuraGroupCandidateFilters(key, candidate) end
+    -- 显式设置，确保 Flow API 下生效
+    c:SetAuraGroupLayout(key, {
+        elementWidth = size,
+        elementHeight = size,
+        elementSpacing = GAP,
+        lineSpacing = GAP,
+    })
 end
 
 -- 一整套构建（含分组）放进 pcall：任何 API 缺失/战斗保护都不中断插件
-local function SetupContainer(f, fromRight, groups)
-    local c = BuildContainer(f, fromRight)
-    if not c then return nil end
+local function SetupContainer(f, c, groups)
     for _, g in ipairs(groups) do
-        AddGroup(c, g.key, g.filter, g.candidate)
+        AddGroup(c, g.key, g.filter, g.candidate, g.size)
     end
-    return c
 end
 
--- 为单个首领框创建 buff/debuff 原生容器；失败则排队脱战重试
+-- 为单个首领框创建 3 个原生容器；失败则排队脱战重试
 function Auras.CreateContainers(f)
     if not f then return false end
-    if not f.buffContainer then
-        -- 可偷取（法术后遣）与激怒（可进攻驱散）分两个候选组，引擎安全判定
-        local ok, c = pcall(SetupContainer, f, false, {
-            { key = f.unit .. "Stealable", filter = "HELPFUL", candidate = { isStealable = true } },
-            { key = f.unit .. "Enrage",    filter = "HELPFUL", candidate = { includeDispelTypes = { Enrage = true } } },
-        })
-        if ok then f.buffContainer = c end
+    if not f.buffSpecial then
+        -- 可偷取 + 激怒（可驱散） 20×20，左侧起点向右生长
+        local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_SPECIAL)
+        if ok and c then
+            pcall(SetupContainer, f, c, {
+                { key = f.unit .. "Stealable", filter = "HELPFUL", candidate = { isStealable = true }, size = SIZE_BUFF_SPECIAL },
+                { key = f.unit .. "Enrage",    filter = "HELPFUL", candidate = { includeDispelTypes = { Enrage = true } }, size = SIZE_BUFF_SPECIAL },
+            })
+            f.buffSpecial = c
+        end
+    end
+    if not f.buffRegular then
+        -- 普通 HELPFUL 增益 16×16，锚定到 buffSpecial 右侧
+        if not InCombatLockdown() and f.buffSpecial then
+            local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_REGULAR)
+            if ok and c then
+                pcall(SetupContainer, f, c, {
+                    { key = f.unit .. "Regular", filter = "HELPFUL", candidate = nil, size = SIZE_BUFF_REGULAR },
+                })
+                -- 重定位到 buffSpecial 右侧
+                c:ClearAllPoints()
+                c:SetPoint("TOPLEFT", f.buffSpecial, "TOPRIGHT", 0, 0)
+                f.buffRegular = c
+            end
+        end
     end
     if not f.debuffContainer then
-        local ok, c = pcall(SetupContainer, f, true, {
-            { key = f.unit .. "Debuff", filter = DEBUFF_FILTER, candidate = nil },
-        })
-        if ok then f.debuffContainer = c end
+        -- 玩家施加的 HARMFUL debuff 16×16，右侧起点向左生长
+        local ok, c = pcall(BuildContainer, f, "TOPRIGHT", "BOTTOMRIGHT", FlowDir.Left, SIZE_DEBUFF)
+        if ok and c then
+            pcall(SetupContainer, f, c, {
+                { key = f.unit .. "Debuff", filter = DEBUFF_FILTER, candidate = nil, size = SIZE_DEBUFF },
+            })
+            f.debuffContainer = c
+        end
     end
-    if not f.buffContainer or not f.debuffContainer then
+    if not f.buffSpecial or not f.buffRegular or not f.debuffContainer then
         pendingFrames[f] = true
         return false
     end
@@ -189,42 +217,48 @@ end
 function Auras.SetUnit(f, unit)
     if not Auras.CreateContainers(f) then return end  -- 战斗中尚未建成，脱战会补
     if f.testRow then f.testRow:Hide() end
-    for _, c in ipairs({ f.buffContainer, f.debuffContainer }) do
-        c:SetUnit(unit)
-        c:Show()
-        c:SetEnabled(true)
-    end
-end
-
--- 光环图标尺寸变更（选项面板 24/32/40）
-function Auras.ApplySize(f)
-    if not f or not f.buffContainer then return end
-    local size = profile().auraSize
-    if f.auraRow then f.auraRow:SetSize(FRAME_W, size) end
-    for _, c in ipairs({ f.buffContainer, f.debuffContainer }) do
-        c.currentSize = size
-        c:SetSize(size, size)
-        c:SetFlowLayoutMaximumLineSize(LineSize(size))
-        for _, key in ipairs(c.groupKeys) do
-            c:SetAuraGroupLayout(key, {
-                elementWidth = size,
-                elementHeight = size,
-                elementSpacing = GAP,
-                lineSpacing = GAP,
-            })
-            c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
+    for _, c in ipairs({ f.buffSpecial, f.buffRegular, f.debuffContainer }) do
+        if c then
+            c:SetUnit(unit)
+            c:Show()
+            c:SetEnabled(true)
         end
-        -- 不能直接对引擎生成的受保护 AuraButton 调 SetSize（taint 报错），
-        -- 尺寸由上面的 SetAuraGroupLayout(elementWidth/Height) 让引擎自行套用
     end
-    if f.testRow then f.testRow:SetSize(FRAME_W, size) end
 end
 
--- 单位消失：停用容器（随父框体一并隐藏）；占位行保持尺寸以维持栅格布局
+-- 三个容器尺寸都是常量，应用层仅同步 Flow 布局最大行宽
+function Auras.ApplySize(f)
+    if not f or not f.buffSpecial then return end
+    for _, entry in ipairs({
+        { c = f.buffSpecial,   size = SIZE_BUFF_SPECIAL },
+        { c = f.buffRegular,   size = SIZE_BUFF_REGULAR },
+        { c = f.debuffContainer, size = SIZE_DEBUFF },
+    }) do
+        local c, size = entry.c, entry.size
+        if c then
+            c.currentSize = size
+            c:SetSize(size, size)
+            c:SetFlowLayoutMaximumLineSize(LineSize(size))
+            for _, key in ipairs(c.groupKeys) do
+                c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
+                c:SetAuraGroupLayout(key, {
+                    elementWidth = size,
+                    elementHeight = size,
+                    elementSpacing = GAP,
+                    lineSpacing = GAP,
+                })
+            end
+        end
+    end
+    if f.testRow then
+        f.testRow:SetSize(FRAME_W, SIZE_BUFF_SPECIAL)
+    end
+end
+
+-- 单位消失：停用容器（随父框体一并隐藏）
 function Auras.Clear(f)
-    if f.auraRow then f.auraRow:SetSize(FRAME_W, profile().auraSize) end
     if f.testRow then f.testRow:Hide() end
-    for _, c in ipairs({ f.buffContainer, f.debuffContainer }) do
+    for _, c in ipairs({ f.buffSpecial, f.buffRegular, f.debuffContainer }) do
         if c then
             c:SetEnabled(false)
             c:Hide()
@@ -241,7 +275,7 @@ local COLOR_STEALABLE = { 0.50, 0.25, 1.00 }  -- 可偷取：蓝紫
 local COLOR_DISPEL    = { 1.00, 0.38, 0.12 }  -- 可驱散：橙红
 local COLOR_DEBUFF    = { 0.60, 0.20, 1.00 }  -- 玩家魔法减益：紫
 
-local function CreateTestButton(row)
+local function CreateTestButton(row, size)
     local b = CreateFrame("Button", nil, row)
     b.icon = b:CreateTexture(nil, "ARTWORK")
     b.icon:SetAllPoints()
@@ -255,60 +289,75 @@ local function CreateTestButton(row)
     b.border:SetTexture(BORDER_TEX)
     b.border:SetTexCoord(unpack(BORDER_COORD))
     b.border:SetAllPoints()
+    b:SetSize(size, size)
     b:Hide()
     return b
 end
 
 function Auras.ShowTest(f)
-    if f.buffContainer then f.buffContainer:SetEnabled(false); f.buffContainer:Hide() end
+    if f.buffSpecial then f.buffSpecial:SetEnabled(false); f.buffSpecial:Hide() end
+    if f.buffRegular then f.buffRegular:SetEnabled(false); f.buffRegular:Hide() end
     if f.debuffContainer then f.debuffContainer:SetEnabled(false); f.debuffContainer:Hide() end
 
     if not f.testRow then
         local row = CreateFrame("Frame", nil, f)
         row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -GAP)
         row.buttons = {}
-        for i = 1, 3 do row.buttons[i] = CreateTestButton(row) end
         f.testRow = row
     end
     local row = f.testRow
-    local size = profile().auraSize
-    row:SetSize(FRAME_W, size)
+    -- 测试按钮按各类型对应尺寸
+    local szSpec  = SIZE_BUFF_SPECIAL
+    local szReg   = SIZE_BUFF_REGULAR
+    local szDebuf = SIZE_DEBUFF
+    row:SetSize(FRAME_W, szSpec)
 
-    local function place(b, anchor, rightSide)
-        b:SetSize(size, size)
-        b:ClearAllPoints()
-        if anchor then
-            b:SetPoint("TOPLEFT", anchor, "TOPRIGHT", GAP, 0)
-        elseif rightSide then
-            b:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
-        else
-            b:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        end
+    while #row.buttons < 4 do
+        local b = CreateTestButton(row, szSpec)
+        row.buttons[#row.buttons + 1] = b
     end
+    local b1, b2, b3, b4 = row.buttons[1], row.buttons[2], row.buttons[3], row.buttons[4]
 
-    local b1, b2, b3 = row.buttons[1], row.buttons[2], row.buttons[3]
-
-    place(b1, nil, false)
+    -- b1: 可偷取（20×20，左侧起）
+    b1:SetSize(szSpec, szSpec)
+    b1:ClearAllPoints()
+    b1:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
     b1.icon:SetTexture(GetSpellTexture(118))    -- 变形术图标，模拟可偷取
     b1.count:SetText("")
     b1.border:SetVertexColor(unpack(COLOR_STEALABLE))
     b1.cooldown:Hide()
     b1:Show()
 
-    place(b2, b1, false)
-    b2.icon:SetTexture(GetSpellTexture(6673))   -- 战斗怒吼图标，模拟激怒（可驱散）
+    -- b2: 激怒/可驱散（20×20，紧贴 b1 右侧）
+    b2:SetSize(szSpec, szSpec)
+    b2:ClearAllPoints()
+    b2:SetPoint("TOPLEFT", b1, "TOPRIGHT", GAP, 0)
+    b2.icon:SetTexture(GetSpellTexture(6673))   -- 战斗怒吼图标，模拟激怒
     b2.count:SetText(3)
     b2.border:SetVertexColor(unpack(COLOR_DISPEL))
     b2.cooldown:Hide()
     b2:Show()
 
-    place(b3, nil, true)
-    b3.icon:SetTexture(GetSpellTexture(589))    -- 暗言术：痛图标，模拟玩家 debuff
-    b3.count:SetText(5)
-    b3.border:SetVertexColor(unpack(COLOR_DEBUFF))
-    b3.cooldown:SetCooldown(GetTime() - 8, 30)  -- 剩余约 22 秒
-    b3.cooldown:Show()
+    -- b3: 普通 HELPFUL（16×16，紧贴 b2 右侧）
+    b3:SetSize(szReg, szReg)
+    b3:ClearAllPoints()
+    b3:SetPoint("TOPLEFT", b2, "TOPRIGHT", GAP, 0)
+    b3.icon:SetTexture(GetSpellTexture(48440))  -- 嗜血
+    b3.count:SetText("")
+    b3.border:SetVertexColor(unpack(COLOR_STEALABLE))
+    b3.cooldown:Hide()
     b3:Show()
+
+    -- b4: 玩家 debuff（16×16，右侧起）
+    b4:SetSize(szDebuf, szDebuf)
+    b4:ClearAllPoints()
+    b4:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
+    b4.icon:SetTexture(GetSpellTexture(589))    -- 暗言术：痛图标，模拟玩家 debuff
+    b4.count:SetText(5)
+    b4.border:SetVertexColor(unpack(COLOR_DEBUFF))
+    b4.cooldown:SetCooldown(GetTime() - 8, 30)  -- 剩余约 22 秒
+    b4.cooldown:Show()
+    b4:Show()
 
     row:Show()
 end

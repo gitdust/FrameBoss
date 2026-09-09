@@ -27,25 +27,17 @@ function FrameBoss:SetupOptions()
                         get = function() return profile().scale end,
                         set = function(_, v) profile().scale = v; FrameBoss:ApplyMover() end,
                     },
-                    auraSize = {
-                        type = "select",
-                        name = "光环图标大小",
-                        order = 2,
-                        values = { [24] = "24 px", [32] = "32 px", [40] = "40 px" },
-                        get = function() return profile().auraSize end,
-                        set = function(_, v) profile().auraSize = v; FrameBoss:RefreshAll() end,
-                    },
                     showPower = {
                         type = "toggle",
                         name = "显示能量条",
-                        order = 3,
+                        order = 2,
                         get = function() return profile().showPower end,
                         set = function(_, v) profile().showPower = v; FrameBoss:RefreshAll() end,
                     },
                     healthColor = {
                         type = "color",
                         name = "血条颜色",
-                        order = 4,
+                        order = 3,
                         get = function()
                             local c = profile().healthColor
                             return c[1], c[2], c[3]
@@ -55,30 +47,20 @@ function FrameBoss:SetupOptions()
                             FrameBoss:ApplySettings()
                         end,
                     },
-                    moverHeader = { type = "header", name = "位置", order = 10 },
-                    unlock = {
+                    editHeader = { type = "header", name = "位置与预览", order = 10 },
+                    editMode = {
                         type = "toggle",
-                        name = "解锁移动（拖动绿色框体）",
+                        name = "编辑模式（解锁拖动 + 显示测试框体）",
                         order = 11,
-                        get = function() return not profile().locked end,
-                        set = function(_, v)
-                            profile().locked = not v
-                            FrameBoss:RefreshAll()
-                        end,
+                        desc = "开启后可拖动绿色框体调整位置，并预览 5 个测试首领框体；关闭后自动退出测试模式。",
+                        get = function() return profile().editMode end,
+                        set = function(_, v) FrameBoss:SetEditMode(v) end,
                     },
                     resetPosition = {
                         type = "execute",
                         name = "重置位置",
                         order = 12,
                         func = function() FrameBoss:ResetPosition() end,
-                    },
-                    testHeader = { type = "header", name = "测试", order = 20 },
-                    testMode = {
-                        type = "toggle",
-                        name = "测试模式（副本外预览 5 个框体）",
-                        order = 21,
-                        get = function() return profile().testMode end,
-                        set = function(_, v) FrameBoss:SetTestMode(v) end,
                     },
                 },
             },
@@ -99,8 +81,9 @@ end
 
 function FrameBoss:ChatCommand(input)
     local cmd = strtrim(input or ""):lower()
-    if cmd == "test" then
-        self:SetTestMode(not self.db.profile.testMode)
+    if cmd == "test" or cmd == "edit" then
+        -- /fb test 或 /fb edit：切换编辑模式（含测试模式）
+        self:SetEditMode(not self.db.profile.editMode)
     else
         AceConfigDialog:Open("FrameBoss")
     end
