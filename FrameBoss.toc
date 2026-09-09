@@ -1,6 +1,6 @@
 ## Title: FrameBoss
 ## IconTexture: Interface\AddOns\FrameBoss\Media\Logo.tga
-## Notes: 简洁首领战框体：头像、大血条、能量条、可偷取/可驱散 buff 与玩家 debuff
+## Notes: 简洁首领战框体：大血条、能量条、可偷取/可驱散 buff 与玩家 debuff（无底版无头像）
 ## Author: iCH4O
 ## Version: 1.0.0
 ## Interface: 120000, 120001, 120005, 120007, 120100
