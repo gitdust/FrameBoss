@@ -1,36 +1,40 @@
 --[[
     FrameBoss - Auras.lua
-    12.x 起副本内首领单位的光环整体是 secret：tainted（插件）代码直接调用
-    C_UnitAuras.GetAuraDataByIndex 会报 "Auras cannot be accessed when secret"。
-    因此改用暴雪原生 AuraContainer（CustomAuraContainerTemplate，定义在按需
-    加载的 Blizzard_AuraContainer 插件里）：引擎在安全上下文内部枚举光环，
-    secret 单位也能正常显示，并自动处理刷新、冷却扫秒、层数、类型边框和 Tooltip。
+    As of 12.x, boss auras inside instances are entirely secret: tainted
+    (addon) code calling C_UnitAuras.GetAuraDataByIndex raises
+    "Auras cannot be accessed when secret". We therefore use Blizzard's
+    native AuraContainer (CustomAuraContainerTemplate, defined in the
+    on-demand Blizzard_AuraContainer addon): the engine enumerates auras
+    inside a secure context, so secret units display correctly and
+    refresh, cooldown sweep, stack count, type border, and tooltip are
+    all handled automatically.
 
-    每个首领框三个容器（当前客户端为 Flow 布局 API，参考 DBM AuraTracking）：
-      Buff-Special 容器（左侧）：HELPFUL 且可偷取 / 可驱散（激怒）  20×20
-      Buff-Regular 容器（中左）：HELPFUL 普通增益                    16×16
-      Debuff        容器（右侧）：HARMFUL|PLAYER —— 仅玩家（含宠物/载具）施加  16×16
+    Three containers per boss frame (current client uses the Flow layout API,
+    modelled after DBM AuraTracking):
+      Buff-Special container (left): HELPFUL and stealable / dispel (enrage)  20x20
+      Buff-Regular container (mid-left): HELPFUL ordinary buffs              16x16
+      Debuff container (right): HARMFUL|PLAYER -- only player (incl. pet/vehicle) applied  16x16
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
 local Auras = {}
 FrameBoss.Auras = Auras
 
-local GetSpellTexture = C_Spell.GetSpellTexture  -- 11.0 起全局 GetSpellTexture 已移除
+local GetSpellTexture = C_Spell.GetSpellTexture  -- global GetSpellTexture was removed as of 11.0
 
 local FRAME_W = FrameBoss.FRAME_W
-local GAP = 0  -- 图标紧贴，光环行紧贴框体
+local GAP = 0  -- icons hug each other; the aura row hugs the frame
 
--- 光环组尺寸（用户指定：可驱散/可偷取放大，普通光环缩小）
-local SIZE_BUFF_SPECIAL = 20  -- 可偷取 / 激怒
-local SIZE_BUFF_REGULAR = 16  -- 普通 HELPFUL
-local SIZE_DEBUFF       = 16  -- 玩家施加的 HARMFUL
+-- Aura group sizes: dispel/stealable are larger, ordinary auras are smaller.
+local SIZE_BUFF_SPECIAL = 20  -- stealable / enrage
+local SIZE_BUFF_REGULAR = 16  -- ordinary HELPFUL
+local SIZE_DEBUFF       = 16  -- player-applied HARMFUL
 
 local DEBUFF_FILTER = "HARMFUL|PLAYER"
 
 local function profile() return FrameBoss.db.profile end
 
--- CustomAuraContainerTemplate 属于按需加载的 Blizzard_AuraContainer
+-- CustomAuraContainerTemplate lives in the on-demand Blizzard_AuraContainer addon.
 local function EnsureAuraLib()
     if C_AddOns and C_AddOns.IsAddOnLoaded and not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then
         return C_AddOns.LoadAddOn("Blizzard_AuraContainer")
@@ -43,9 +47,9 @@ local SortDir      = (AuraContainerSortDirection and AuraContainerSortDirection.
 local FlowDir      = AnchorUtil.FlowDirection    -- .Right / .Left / .Down
 local FlowAxisH    = AnchorUtil.FlowLayoutAxis.Horizontal
 
--- 容器宽 = 光环行可用宽度（左半帧 / 右半帧）
+-- Container width = available width of the aura row (left half / right half).
 local CONTAINER_W = math.floor(FRAME_W / 2) - GAP
--- 每侧最多图标数（按指定 size 计算）
+-- Max icon count per side (computed from the configured size).
 local function MaxPerSide(size)
     return math.max(1, math.floor((CONTAINER_W + GAP) / (size + GAP)))
 end
@@ -54,7 +58,7 @@ local function LineSize(size)
     return size * n + GAP * (n - 1)
 end
 
--- 战斗中无法创建 AuraContainer（受保护），脱战后自动补建并重绑单位
+-- AuraContainer creation is protected in combat; rebuild and rebind units after combat ends.
 local pendingFrames = {}
 local retryFrame = CreateFrame("Frame")
 retryFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -66,8 +70,9 @@ retryFrame:SetScript("OnEvent", function()
     if any and FrameBoss.frames then FrameBoss:RefreshAll() end
 end)
 
--- 按钮初始化（引擎创建新按钮时回调）
--- 容器为单一 size 时直接用；混合 size 容器使用传入的 size 闭包
+-- Button initialization (engine callback when it creates a new button).
+-- Single-size containers use the size directly; mixed-size containers use
+-- the size closure passed in.
 local function InitializeButton(container, size)
     return function(button)
         button:SetSize(size, size)
@@ -90,7 +95,8 @@ local function InitializeButton(container, size)
         count:SetPoint("BOTTOMRIGHT", -1, 1)
         button:SetApplicationCount(count, {})
 
-        -- 引擎按光环类型自动着色（魔法/中毒/疾病/诅咒/激怒…），增益减益都显示
+        -- Engine colors the border by aura type (Magic / Poison / Disease /
+        -- Curse / Enrage...); shown for both buffs and debuffs.
         local border = button:CreateTexture(nil, "OVERLAY")
         border:SetAllPoints()
         button:AddDispelTypeTexture(border, {
@@ -118,9 +124,10 @@ local function GroupOptions(container, size, candidate)
     }
 end
 
--- 容器构造（inAuraRow=左侧起点；iconFromRight=debuff 时反向生长）
+-- Container construction (inAuraRow = left-edge anchor; iconFromRight = grow
+-- toward the left when this is a debuff container).
 local function BuildContainer(f, anchor, relAnchor, growH, size)
-    if InCombatLockdown() then return nil end  -- 战斗中创建受保护，等脱战补建
+    if InCombatLockdown() then return nil end  -- protected in combat; rebuilt after combat ends
     EnsureAuraLib()
 
     local ok, c = pcall(CreateFrame, "AuraContainer", nil, f, "CustomAuraContainerTemplate")
@@ -134,7 +141,7 @@ local function BuildContainer(f, anchor, relAnchor, growH, size)
     c:Hide()
     c:ClearAllPoints()
     c:SetPoint(anchor, f, relAnchor, 0, -GAP)
-    c:SetSize(size, size)  -- 容器不裁剪子框，图标可向外排布
+    c:SetSize(size, size)  -- container does not clip child frames; icons may extend outward
     c:SetFlowLayoutAxis(FlowAxisH)
     c:SetFlowLayoutAnchorPoint(anchor)
     c:SetFlowLayoutGrowthDirection(growH, FlowDir.Down)
@@ -149,7 +156,7 @@ local function AddGroup(c, key, filter, candidate, size)
     end
     c:SetAuraGroupMaxFrameCount(key, MaxPerSide(size))
     if candidate then c:SetAuraGroupCandidateFilters(key, candidate) end
-    -- 显式设置，确保 Flow API 下生效
+    -- Explicit layout call to ensure the Flow API takes effect.
     c:SetAuraGroupLayout(key, {
         elementWidth = size,
         elementHeight = size,
@@ -158,18 +165,20 @@ local function AddGroup(c, key, filter, candidate, size)
     })
 end
 
--- 一整套构建（含分组）放进 pcall：任何 API 缺失/战斗保护都不中断插件
+-- Wrap the whole setup (including group registration) in pcall: any missing
+-- API or combat protection won't break the addon.
 local function SetupContainer(f, c, groups)
     for _, g in ipairs(groups) do
         AddGroup(c, g.key, g.filter, g.candidate, g.size)
     end
 end
 
--- 为单个首领框创建 3 个原生容器；失败则排队脱战重试
+-- Create 3 native containers per boss frame; on failure, queue a retry
+-- for after combat ends.
 function Auras.CreateContainers(f)
     if not f then return false end
     if not f.buffSpecial then
-        -- 可偷取 + 激怒（可驱散） 20×20，左侧起点向右生长
+        -- Stealable + Enrage (dispel) 20x20, anchored to the left, grows right.
         local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_SPECIAL)
         if ok and c then
             pcall(SetupContainer, f, c, {
@@ -180,14 +189,14 @@ function Auras.CreateContainers(f)
         end
     end
     if not f.buffRegular then
-        -- 普通 HELPFUL 增益 16×16，锚定到 buffSpecial 右侧
+        -- Ordinary HELPFUL buff 16x16, anchored to the right of buffSpecial.
         if not InCombatLockdown() and f.buffSpecial then
             local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_REGULAR)
             if ok and c then
                 pcall(SetupContainer, f, c, {
                     { key = f.unit .. "Regular", filter = "HELPFUL", candidate = nil, size = SIZE_BUFF_REGULAR },
                 })
-                -- 重定位到 buffSpecial 右侧
+                -- Re-anchor to the right side of buffSpecial.
                 c:ClearAllPoints()
                 c:SetPoint("TOPLEFT", f.buffSpecial, "TOPRIGHT", 0, 0)
                 f.buffRegular = c
@@ -195,7 +204,7 @@ function Auras.CreateContainers(f)
         end
     end
     if not f.debuffContainer then
-        -- 玩家施加的 HARMFUL debuff 16×16，右侧起点向左生长
+        -- Player-applied HARMFUL debuff 16x16, anchored to the right, grows left.
         local ok, c = pcall(BuildContainer, f, "TOPRIGHT", "BOTTOMRIGHT", FlowDir.Left, SIZE_DEBUFF)
         if ok and c then
             pcall(SetupContainer, f, c, {
@@ -213,9 +222,10 @@ function Auras.CreateContainers(f)
     return true
 end
 
--- 绑定单位并启用查询（之后容器自行监听 UNIT_AURA，无需插件驱动）
+-- Bind a unit and enable queries (the container listens to UNIT_AURA on its
+-- own; the addon doesn't need to drive it).
 function Auras.SetUnit(f, unit)
-    if not Auras.CreateContainers(f) then return end  -- 战斗中尚未建成，脱战会补
+    if not Auras.CreateContainers(f) then return end  -- not yet built in combat; rebuilt after combat ends
     if f.testRow then f.testRow:Hide() end
     for _, c in ipairs({ f.buffSpecial, f.buffRegular, f.debuffContainer }) do
         if c then
@@ -226,7 +236,8 @@ function Auras.SetUnit(f, unit)
     end
 end
 
--- 三个容器尺寸都是常量，应用层仅同步 Flow 布局最大行宽
+-- All three container sizes are constants; the application layer only has to
+-- resync each container's Flow layout max line size.
 function Auras.ApplySize(f)
     if not f or not f.buffSpecial then return end
     for _, entry in ipairs({
@@ -255,7 +266,7 @@ function Auras.ApplySize(f)
     end
 end
 
--- 单位消失：停用容器（随父框体一并隐藏）
+-- Unit gone: disable the containers (they hide with their parent frame).
 function Auras.Clear(f)
     if f.testRow then f.testRow:Hide() end
     for _, c in ipairs({ f.buffSpecial, f.buffRegular, f.debuffContainer }) do
@@ -266,14 +277,14 @@ function Auras.Clear(f)
     end
 end
 
--- 测试模式（假数据不能灌进原生容器，叠加自绘图标占位）-------------------------
+-- Test mode (fake data cannot be fed into native containers; overlay self-drawn icon placeholders instead).
 
 local BORDER_TEX  = "Interface\\Buttons\\UI-Debuff-Overlays"
 local BORDER_COORD = { 0.296875, 0.5703125, 0, 0.515625 }
 
-local COLOR_STEALABLE = { 0.50, 0.25, 1.00 }  -- 可偷取：蓝紫
-local COLOR_DISPEL    = { 1.00, 0.38, 0.12 }  -- 可驱散：橙红
-local COLOR_DEBUFF    = { 0.60, 0.20, 1.00 }  -- 玩家魔法减益：紫
+local COLOR_STEALABLE = { 0.50, 0.25, 1.00 }  -- stealable: blue-purple
+local COLOR_DISPEL    = { 1.00, 0.38, 0.12 }  -- dispel: orange-red
+local COLOR_DEBUFF    = { 0.60, 0.20, 1.00 }  -- player magic debuff: purple
 
 local function CreateTestButton(row, size)
     local b = CreateFrame("Button", nil, row)
@@ -306,7 +317,7 @@ function Auras.ShowTest(f)
         f.testRow = row
     end
     local row = f.testRow
-    -- 测试按钮按各类型对应尺寸
+    -- Test buttons use each type's corresponding size.
     local szSpec  = SIZE_BUFF_SPECIAL
     local szReg   = SIZE_BUFF_REGULAR
     local szDebuf = SIZE_DEBUFF
@@ -318,44 +329,44 @@ function Auras.ShowTest(f)
     end
     local b1, b2, b3, b4 = row.buttons[1], row.buttons[2], row.buttons[3], row.buttons[4]
 
-    -- b1: 可偷取（20×20，左侧起）
+    -- b1: stealable (20x20, left edge)
     b1:SetSize(szSpec, szSpec)
     b1:ClearAllPoints()
     b1:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-    b1.icon:SetTexture(GetSpellTexture(118))    -- 变形术图标，模拟可偷取
+    b1.icon:SetTexture(GetSpellTexture(118))    -- Polymorph icon, mock stealable
     b1.count:SetText("")
     b1.border:SetVertexColor(unpack(COLOR_STEALABLE))
     b1.cooldown:Hide()
     b1:Show()
 
-    -- b2: 激怒/可驱散（20×20，紧贴 b1 右侧）
+    -- b2: enrage / dispel (20x20, flush right of b1)
     b2:SetSize(szSpec, szSpec)
     b2:ClearAllPoints()
     b2:SetPoint("TOPLEFT", b1, "TOPRIGHT", GAP, 0)
-    b2.icon:SetTexture(GetSpellTexture(6673))   -- 战斗怒吼图标，模拟激怒
+    b2.icon:SetTexture(GetSpellTexture(6673))   -- Battle Shout icon, mock enrage
     b2.count:SetText(3)
     b2.border:SetVertexColor(unpack(COLOR_DISPEL))
     b2.cooldown:Hide()
     b2:Show()
 
-    -- b3: 普通 HELPFUL（16×16，紧贴 b2 右侧）
+    -- b3: ordinary HELPFUL (16x16, flush right of b2)
     b3:SetSize(szReg, szReg)
     b3:ClearAllPoints()
     b3:SetPoint("TOPLEFT", b2, "TOPRIGHT", GAP, 0)
-    b3.icon:SetTexture(GetSpellTexture(48440))  -- 嗜血
+    b3.icon:SetTexture(GetSpellTexture(48440))  -- Bloodlust
     b3.count:SetText("")
     b3.border:SetVertexColor(unpack(COLOR_STEALABLE))
     b3.cooldown:Hide()
     b3:Show()
 
-    -- b4: 玩家 debuff（16×16，右侧起）
+    -- b4: player debuff (16x16, right edge)
     b4:SetSize(szDebuf, szDebuf)
     b4:ClearAllPoints()
     b4:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
-    b4.icon:SetTexture(GetSpellTexture(589))    -- 暗言术：痛图标，模拟玩家 debuff
+    b4.icon:SetTexture(GetSpellTexture(589))    -- Shadow Word: Pain, mock player debuff
     b4.count:SetText(5)
     b4.border:SetVertexColor(unpack(COLOR_DEBUFF))
-    b4.cooldown:SetCooldown(GetTime() - 8, 30)  -- 剩余约 22 秒
+    b4.cooldown:SetCooldown(GetTime() - 8, 30)  -- about 22 seconds remaining
     b4.cooldown:Show()
     b4:Show()
 

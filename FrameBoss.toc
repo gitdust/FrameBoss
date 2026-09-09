@@ -1,13 +1,15 @@
 ## Title: FrameBoss
 ## IconTexture: Interface\AddOns\FrameBoss\Media\Logo.tga
-## Notes: 简洁首领战框体：大血条、能量条、可偷取/可驱散 buff 与玩家 debuff（无底版无头像）
+## Notes: Minimalist boss frames: large health bar, power bar, stealable/dispel buffs, and player debuffs (no backdrop, no portrait).
 ## Author: iCH4O
-## Version: 1.0.0
+## Version: 1.0.1
 ## Interface: 120000, 120001, 120005, 120007, 120100
 ## SavedVariables: FrameBossDB
 ## Category: Unit Frames
 
 Libs\Libs.xml
+Locales\enUS.lua
+Locales\zhCN.lua
 Core.lua
 Auras.lua
 Options.lua

@@ -1,11 +1,13 @@
 --[[
     FrameBoss - Options.lua
-    AceConfig 图形设置面板（接入暴雪设置界面）+ /fb、/frameboss 斜杠命令。
+    AceConfig graphical settings panel (wired into Blizzard's Settings UI)
+    plus the /fb and /frameboss slash commands.
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
 local AceConfig = LibStub("AceConfig-3.0")
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
+local L = LibStub("AceLocale-3.0"):GetLocale("FrameBoss", true)
 
 function FrameBoss:SetupOptions()
     local function profile() return self.db.profile end
@@ -16,12 +18,12 @@ function FrameBoss:SetupOptions()
         args = {
             general = {
                 type = "group",
-                name = "常规设置",
+                name = L["OPT_GROUP_GENERAL"],
                 order = 1,
                 args = {
                     scale = {
                         type = "range",
-                        name = "整体缩放",
+                        name = L["OPT_SCALE"],
                         order = 1,
                         min = 0.6, max = 2.0, step = 0.05,
                         get = function() return profile().scale end,
@@ -29,14 +31,14 @@ function FrameBoss:SetupOptions()
                     },
                     showPower = {
                         type = "toggle",
-                        name = "显示能量条",
+                        name = L["OPT_SHOW_POWER"],
                         order = 2,
                         get = function() return profile().showPower end,
                         set = function(_, v) profile().showPower = v; FrameBoss:RefreshAll() end,
                     },
                     healthColor = {
                         type = "color",
-                        name = "血条颜色",
+                        name = L["OPT_HEALTH_COLOR"],
                         order = 3,
                         get = function()
                             local c = profile().healthColor
@@ -47,18 +49,18 @@ function FrameBoss:SetupOptions()
                             FrameBoss:ApplySettings()
                         end,
                     },
-                    editHeader = { type = "header", name = "位置与预览", order = 10 },
+                    editHeader = { type = "header", name = L["OPT_HEADER_POSITION"], order = 10 },
                     editMode = {
                         type = "toggle",
-                        name = "编辑模式（解锁拖动 + 显示测试框体）",
+                        name = L["OPT_EDIT_MODE"],
                         order = 11,
-                        desc = "开启后可拖动绿色框体调整位置，并预览 5 个测试首领框体；关闭后自动退出测试模式。",
+                        desc = L["OPT_EDIT_MODE_DESC"],
                         get = function() return profile().editMode end,
                         set = function(_, v) FrameBoss:SetEditMode(v) end,
                     },
                     resetPosition = {
                         type = "execute",
-                        name = "重置位置",
+                        name = L["OPT_RESET_POSITION"],
                         order = 12,
                         func = function() FrameBoss:ResetPosition() end,
                     },
@@ -67,7 +69,7 @@ function FrameBoss:SetupOptions()
         },
     }
 
-    -- 配置档案（profiles）
+    -- Profiles
     local profiles = LibStub("AceDBOptions-3.0"):GetOptionsTable(self.db)
     profiles.order = -1
     options.args.profiles = profiles
@@ -82,7 +84,7 @@ end
 function FrameBoss:ChatCommand(input)
     local cmd = strtrim(input or ""):lower()
     if cmd == "test" or cmd == "edit" then
-        -- /fb test 或 /fb edit：切换编辑模式（含测试模式）
+        -- /fb test or /fb edit: toggle edit mode (also toggles test mode).
         self:SetEditMode(not self.db.profile.editMode)
     else
         AceConfigDialog:Open("FrameBoss")

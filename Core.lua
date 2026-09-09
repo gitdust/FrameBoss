@@ -1,32 +1,38 @@
 --[[
     FrameBoss - Core.lua
-    简洁首领框体：名称 / 大血条 / 能量条 / 重要 buff / 玩家 debuff（无头像、无底板）
-    纯暴雪原生 API + Ace3 骨架；布局严格 8px 栅格。
+    Minimalist boss frames: name / large health bar / power bar / important
+    buffs / player debuffs (no portrait, no backdrop).
+    Pure Blizzard native API + Ace3 scaffolding; layout is a strict 8px grid.
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):NewAddon("FrameBoss", "AceEvent-3.0", "AceConsole-3.0")
 _G.FrameBoss = FrameBoss
 
--- 12.0 起，副本内敌方单位的血量/能量等可能是 "secret" 数值：
--- 插件代码不能对它做算术或字符串拼接（会抛 "numeric conversion on a secret number"），
--- 只能原样传给 StatusBar 等引擎 API；需要显示百分比时用 UnitHealthPercent/UnitPowerPercent。
+local L = LibStub("AceLocale-3.0"):GetLocale("FrameBoss", true)
+
+-- As of 12.0, enemy-unit health/power inside instances may be "secret" values:
+-- addon code may not perform arithmetic or string concatenation on them
+-- (raises "numeric conversion on a secret number"); pass them straight
+-- through to engine APIs like StatusBar; for percentage display use
+-- UnitHealthPercent / UnitPowerPercent.
 local isSecret = issecretvalue or function() return false end
 
--- 布局常量（内容紧贴，无内边距；头像 56×56 矩形，血条与能量条在头像右侧）
+-- Layout constants: content hugs the edges, no padding; portrait is a 56x56
+-- square to the left of the health/power bars.
 local FRAME_W    = 240
 local PORTRAIT_W = 56
 local PORTRAIT_H = 56
 local HEALTH_H   = 32
 local POWER_H    = 24
-local FRAME_H    = PORTRAIT_H                       -- 56（有能量条时与头像等高）
-local FRAME_H_NP = HEALTH_H                         -- 32（无能量条）
+local FRAME_H    = PORTRAIT_H                       -- 56 (matches portrait height when power bar visible)
+local FRAME_H_NP = HEALTH_H                         -- 32 (no power bar)
 local BAR_X      = PORTRAIT_W                       -- 56
 local BAR_W      = FRAME_W - PORTRAIT_W             -- 184
-local GAP        = 0                                -- 元素全部紧贴
-local AURA_ROW_H = 20                               -- 光环行占位高（取最大图标 20）
+local GAP        = 0                                -- 0 (elements all flush)
+local AURA_ROW_H = 20                               -- 20 (height of the aura row placeholder; equals largest icon)
 local MAX_BOSS   = 5
 
--- 原生风格状态条材质（暴雪自带的光泽状态条）
+-- Native-style status bar texture (Blizzard's built-in glossy bar).
 local BAR_TEX    = "Interface\\TargetingFrame\\UI-StatusBar"
 
 FrameBoss.FRAME_W = FRAME_W
@@ -45,7 +51,7 @@ local defaults = {
     },
 }
 
--- 把 unit token（boss1..boss5）映射到框体
+-- Map a unit token (boss1..boss5) to its frame.
 local function BossFrame(unit)
     if type(unit) ~= "string" then return nil end
     local n = unit:match("^boss(%d)$")
@@ -69,7 +75,7 @@ function FrameBoss:OnEnable()
 end
 
 function FrameBoss:OnDisable()
-    -- 关闭插件：自动退出测试模式，下次加载保持干净状态
+    -- On disable: auto-exit test mode; next load starts in a clean state.
     if self.db and self.db.profile then
         self.db.profile.editMode = false
         self.db.profile.testMode = false
@@ -77,17 +83,18 @@ function FrameBoss:OnDisable()
     end
 end
 
--- 禁用原生首领框体 ---------------------------------------------------------
--- 做法参考 oUF blizzard.lua：容器反注册事件、Hide、reparent 到隐藏父级，
--- 并 hook SetParent 防止编辑模式/布局管理器把它捞回来；
--- 子框体（Boss1TargetFrame…）只反注册事件 + Hide——不能 reparent，
--- 容器的布局代码会因算不出尺寸而报错。
+-- Disable native boss frames.
+-- Approach mirrors oUF blizzard.lua: unregister events on the container,
+-- Hide it, reparent to a hidden parent, and hook SetParent so the edit-mode
+-- / layout manager cannot drag it back. Child frames (Boss1TargetFrame...)
+-- only get event unregistration + Hide - reparenting them would crash the
+-- container's layout code because it cannot compute their size.
 
 local hiddenBossParent = CreateFrame("Frame", nil, UIParent)
 hiddenBossParent:SetAllPoints()
 hiddenBossParent:Hide()
 
--- 战斗中对受保护框体 SetParent 会被阻断，退出战斗后补做
+-- SetParent on protected frames is blocked in combat; defer until combat ends.
 local looseBossFrames = {}
 local bossWatcher = CreateFrame("Frame")
 bossWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -134,10 +141,11 @@ function FrameBoss:RegisterEvents()
     self:RegisterEvent("UNIT_DISPLAYPOWER", "UnitPower")
     self:RegisterEvent("UNIT_NAME_UPDATE", "UnitName")
     self:RegisterEvent("UNIT_PORTRAIT_UPDATE", "UnitPortrait")
-    -- UNIT_AURA 无需注册：原生 AuraContainer 内部自动刷新光环
+    -- UNIT_AURA is intentionally NOT registered: the native AuraContainer
+    -- refreshes its contents on its own.
 end
 
--- 事件处理 ---------------------------------------------------------------
+-- Event handlers ------------------------------------------------------------
 
 function FrameBoss:UnitHealth(event, unit)
     if self.db.profile.testMode then return end
@@ -163,7 +171,7 @@ function FrameBoss:UnitPortrait(event, unit)
     if f and UnitExists(unit) then SetPortraitTexture(f.portrait, unit) end
 end
 
--- 容器（锚点/拖动/缩放）---------------------------------------------------
+-- Container (anchor / drag / scale) -----------------------------------------
 
 function FrameBoss:CreateMover()
     local mover = CreateFrame("Frame", "FrameBossAnchor", UIParent, "BackdropTemplate")
@@ -177,7 +185,7 @@ function FrameBoss:CreateMover()
     })
     mover.label = mover:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     mover.label:SetPoint("BOTTOMLEFT", mover, "TOPLEFT", 0, 4)
-    mover.label:SetText("FrameBoss（拖动移动）")
+    mover.label:SetText(L["ANCHOR_LABEL"])
     mover:SetScript("OnDragStart", function(self) self:StartMoving() end)
     mover:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
@@ -217,12 +225,13 @@ function FrameBoss:ApplyMover()
     end
 end
 
--- 框体创建 ---------------------------------------------------------------
+-- Frame creation ------------------------------------------------------------
 
 function FrameBoss:CreateFrames()
     self.frames = {}
     for i = 1, MAX_BOSS do
-        -- 无底版框体；矩形头像在左 56×56，右侧血条/能量条紧贴排列
+        -- Backdrop-less frame; square portrait on the left (56x56), health
+        -- and power bars flush against it on the right.
         local f = CreateFrame("Frame", nil, self.mover)
         f:SetSize(FRAME_W, FRAME_H)
         if i == 1 then
@@ -233,7 +242,7 @@ function FrameBoss:CreateFrames()
         f.bossIndex = i
         f.unit = "boss" .. i
 
-        -- 矩形头像（固定 56×56）
+        -- Square portrait (fixed 56x56).
         f.portrait = f:CreateTexture(nil, "ARTWORK")
         f.portrait:SetSize(PORTRAIT_W, PORTRAIT_H)
         f.portrait:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
@@ -243,7 +252,7 @@ function FrameBoss:CreateFrames()
         pborder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
         pborder:SetBackdropBorderColor(0, 0, 0, 1)
 
-        -- 大血条（高 32，紧贴头部）
+        -- Large health bar (height 32, flush against the top).
         f.health = CreateFrame("StatusBar", nil, f)
         f.health:SetSize(BAR_W, HEALTH_H)
         f.health:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, 0)
@@ -253,7 +262,7 @@ function FrameBoss:CreateFrames()
         hbg:SetTexture(BAR_TEX)
         hbg:SetVertexColor(0.12, 0.04, 0.04)
 
-        -- 名称（血条内左侧，垂直居中）
+        -- Name (left side of the health bar, vertically centered).
         f.name = f.health:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         f.name:SetPoint("LEFT", f.health, "LEFT", 4, 0)
         f.name:SetPoint("RIGHT", f.health, "CENTER", -4, 0)
@@ -262,7 +271,8 @@ function FrameBoss:CreateFrames()
         f.name:SetJustifyV("MIDDLE")
         f.name:SetWordWrap(false)
 
-        -- 血量百分比（血条内右侧，垂直居中，保留 2 位小数）
+        -- Health percent (right side of the health bar, vertically centered,
+        -- 2 decimal places).
         f.percent = f.health:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         f.percent:SetPoint("LEFT", f.health, "CENTER", 4, 0)
         f.percent:SetPoint("RIGHT", f.health, "RIGHT", -4, 0)
@@ -270,7 +280,7 @@ function FrameBoss:CreateFrames()
         f.percent:SetJustifyH("RIGHT")
         f.percent:SetJustifyV("MIDDLE")
 
-        -- 能量条（高 24，紧贴血条下方）
+        -- Power bar (height 24, flush against the bottom of the health bar).
         f.power = CreateFrame("StatusBar", nil, f)
         f.power:SetSize(BAR_W, POWER_H)
         f.power:SetPoint("TOPLEFT", f.health, "BOTTOMLEFT", 0, 0)
@@ -280,14 +290,16 @@ function FrameBoss:CreateFrames()
         pbg:SetTexture(BAR_TEX)
         pbg:SetVertexColor(0.04, 0.04, 0.08)
 
-        -- 光环行占位（紧贴框体下方；本身不渲染，只用于框体间距布局，
-        -- 实际图标由 Auras.lua 的原生 AuraContainer 承载）
+        -- Aura row placeholder (flush under the frame; doesn't render itself,
+        -- only reserves vertical space for the native AuraContainer from
+        -- Auras.lua).
         local row = CreateFrame("Frame", nil, f)
         row:SetSize(FRAME_W, AURA_ROW_H)
         row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -GAP)
         f.auraRow = row
 
-        -- 原生光环容器（战斗中创建会失败，Auras 内部会在脱战后自动补建）
+        -- Native aura container (creation fails in combat; Auras rebuilds it
+        -- automatically after combat ends).
         self.Auras.CreateContainers(f)
 
         f:Hide()
@@ -295,7 +307,7 @@ function FrameBoss:CreateFrames()
     end
 end
 
--- 数据更新 ---------------------------------------------------------------
+-- Data updates --------------------------------------------------------------
 
 function FrameBoss:RefreshFrame(f, unit)
     SetPortraitTexture(f.portrait, unit)
@@ -306,7 +318,7 @@ function FrameBoss:RefreshFrame(f, unit)
 end
 
 function FrameBoss:UpdateHealth(f, unit)
-    -- hp/hpMax 可能是 secret：原样喂给 StatusBar，绝不参与算术
+    -- hp/hpMax may be secret: pass straight to StatusBar; never arithmetic.
     local hp, hpMax = UnitHealth(unit), UnitHealthMax(unit)
     if isSecret(hpMax) then
         f.health:SetMinMaxValues(0, hpMax)
@@ -315,13 +327,15 @@ function FrameBoss:UpdateHealth(f, unit)
     end
     f.health:SetValue(hp)
 
-    -- 百分比：UnitHealthPercent 对副本内首领也可能返回 secret。
-    -- secret 只能穿过 string.format 这类 C 函数（产出 secret 字符串，SetText 接受），
-    -- 绝不能做 Lua 算术（+/math.floor）或 .. 拼接。保留 2 位小数。
+    -- Percentage: UnitHealthPercent may also return secret for instance
+    -- bosses. Secret values can only pass through C functions like
+    -- string.format (which yields a secret string accepted by SetText); do
+    -- NOT perform Lua arithmetic (+/math.floor) or ".." concatenation.
+    -- Keep 2 decimal places.
     if not UnitIsConnected(unit) then
-        f.percent:SetText("离线")
+        f.percent:SetText(L["TEXT_OFFLINE"])
     elseif UnitIsDeadOrGhost(unit) then
-        f.percent:SetText("死亡")
+        f.percent:SetText(L["TEXT_DEAD"])
     elseif not UnitHealthPercent then
         f.percent:SetText("")
     else
@@ -351,7 +365,7 @@ function FrameBoss:UpdatePower(f, unit)
     else
         f.power:Show()
         f:SetHeight(FRAME_H)
-        -- secret 时原样传入；普通数值时兜底 max >= 1
+        -- Pass through when secret; floor to max >= 1 for normal numbers.
         f.power:SetMinMaxValues(0, secret and powerMax or math.max(powerMax, 1))
         f.power:SetValue(power)
         local c = PowerBarColor[UnitPowerType(unit)] or PowerBarColor[0]
@@ -359,11 +373,11 @@ function FrameBoss:UpdatePower(f, unit)
     end
 end
 
--- 全量刷新（开战/进世界/测试切换）-----------------------------------------
+-- Full refresh (engage / world entry / test toggle) ------------------------
 
 function FrameBoss:RefreshAll()
     local db = self.db.profile
-    -- 光环尺寸选项可能在面板里被改动，每次全量刷新时同步布局
+    -- Aura size option may be changed in the panel; resync layout every refresh.
     for i = 1, MAX_BOSS do self.Auras.ApplySize(self.frames[i]) end
     local anyShown = false
     for i = 1, MAX_BOSS do
@@ -397,7 +411,8 @@ function FrameBoss:ApplySettings()
 end
 
 function FrameBoss:SetEditMode(v)
-    -- 编辑模式 = 解锁拖动 + 显示测试框体；关闭时自动退出测试模式
+    -- Edit mode = unlock dragging + show test frames; turning off auto-exits
+    -- test mode.
     local db = self.db.profile
     db.editMode = v
     db.locked = not v
@@ -410,11 +425,11 @@ function FrameBoss:ResetPosition()
     self:ApplyMover()
 end
 
--- 测试模式假数据 ----------------------------------------------------------
+-- Test mode fake data -------------------------------------------------------
 
 function FrameBoss:FillTestFrame(f, i)
     SetPortraitTexture(f.portrait, "player")
-    f.name:SetText("测试首领 " .. i)
+    f.name:SetText(L["TEXT_TEST_BOSS"]:format(i))
     local hp = 90 - i * 10
     f.health:SetMinMaxValues(0, 100)
     f.health:SetValue(hp)
