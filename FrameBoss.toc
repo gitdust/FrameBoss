@@ -2,7 +2,7 @@
 ## IconTexture: Interface\AddOns\FrameBoss\Media\Logo.tga
 ## Notes: Minimalist boss frames: large health bar, power bar, stealable/dispel buffs, and player debuffs (no backdrop, no portrait).
 ## Author: iCH4O
-## Version: 1.0.1
+## Version: 1.0.2
 ## Interface: 120000, 120001, 120005, 120007, 120100
 ## SavedVariables: FrameBossDB
 ## Category: Unit Frames
