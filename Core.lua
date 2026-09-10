@@ -35,6 +35,18 @@ local MAX_BOSS   = 5
 -- Native-style status bar texture (Blizzard's built-in glossy bar).
 local BAR_TEX    = "Interface\\TargetingFrame\\UI-StatusBar"
 
+-- Bar background tracks reuse the bar's native color darkened by this factor.
+local BG_COLOR_FACTOR = 0.15
+-- Hostile-red fallback for test frames / when UnitSelectionColor is unavailable.
+local FALLBACK_HEALTH_COLOR = { 0.9, 0.2, 0.2 }
+
+-- Native nameplate look (see Blizzard_NamePlates): a soft dark shadow frame
+-- behind the bar, and a "deselected" overlay on top of the fill that Blizzard
+-- uses to slightly darken every non-target bar. Both are stretched atlases.
+local ATLAS_BAR_SHADOW = "UI-HUD-CoolDownManager-Bar-BG"
+local ATLAS_BAR_DIM    = "ui-hud-nameplates-deselected-overlay"
+local SHADOW_OUTSET    = 3
+
 FrameBoss.FRAME_W    = FRAME_W
 FrameBoss.PORTRAIT_W = PORTRAIT_W
 
@@ -44,7 +56,6 @@ local defaults = {
     profile = {
         scale       = 1.0,
         showPower   = true,
-        healthColor = { 0.9, 0.2, 0.2 },
         locked      = true,
         testMode    = false,
         editMode    = false,
@@ -64,6 +75,9 @@ end
 
 function FrameBoss:OnInitialize()
     self.db = LibStub("AceDB-3.0"):New("FrameBossDB", defaults)
+    -- One-time cleanup: healthColor was removed when bars switched to native
+    -- UnitSelectionColor; drop the stale key left in older saved variables.
+    self.db.profile.healthColor = nil
     self:SetupOptions()
 end
 
@@ -142,6 +156,9 @@ function FrameBoss:RegisterEvents()
     self:RegisterEvent("UNIT_DISPLAYPOWER", "UnitPower")
     self:RegisterEvent("UNIT_NAME_UPDATE", "UnitName")
     self:RegisterEvent("UNIT_PORTRAIT_UPDATE", "UnitPortrait")
+    -- Faction / flags (tapped state) changes alter the native selection color.
+    self:RegisterEvent("UNIT_FACTION", "UnitFaction")
+    self:RegisterEvent("UNIT_FLAGS", "UnitFaction")
     -- UNIT_AURA is intentionally NOT registered: the native AuraContainer
     -- refreshes its contents on its own.
 end
@@ -170,6 +187,12 @@ function FrameBoss:UnitPortrait(event, unit)
     if self.db.profile.testMode then return end
     local f = BossFrame(unit)
     if f and UnitExists(unit) then SetPortraitTexture(f.portrait, unit) end
+end
+
+function FrameBoss:UnitFaction(event, unit)
+    if self.db.profile.testMode then return end
+    local f = BossFrame(unit)
+    if f and UnitExists(unit) then self:UpdateHealthColor(f, unit) end
 end
 
 -- Container (anchor / drag / scale) -----------------------------------------
@@ -257,10 +280,9 @@ function FrameBoss:CreateFrames()
         f.health:SetSize(BAR_W, HEALTH_H)
         f.health:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, 0)
         f.health:SetStatusBarTexture(BAR_TEX)
-        local hbg = f.health:CreateTexture(nil, "BACKGROUND")
-        hbg:SetAllPoints()
-        hbg:SetTexture(BAR_TEX)
-        hbg:SetVertexColor(0.12, 0.04, 0.04)
+        f.hbg = f.health:CreateTexture(nil, "BACKGROUND")
+        f.hbg:SetAllPoints()
+        f.hbg:SetTexture(BAR_TEX)
 
         -- Name (left side of the health bar, vertically centered).
         f.name = f.health:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -285,10 +307,28 @@ function FrameBoss:CreateFrames()
         f.power:SetSize(BAR_W, POWER_H)
         f.power:SetPoint("TOPLEFT", f.health, "BOTTOMLEFT", 0, 0)
         f.power:SetStatusBarTexture(BAR_TEX)
-        local pbg = f.power:CreateTexture(nil, "BACKGROUND")
-        pbg:SetAllPoints()
-        pbg:SetTexture(BAR_TEX)
-        pbg:SetVertexColor(0.04, 0.04, 0.08)
+        f.pbg = f.power:CreateTexture(nil, "BACKGROUND")
+        f.pbg:SetAllPoints()
+        f.pbg:SetTexture(BAR_TEX)
+
+        -- One soft shadow frame wrapping both bars; subLevel puts it behind
+        -- the per-bar track textures at the same BACKGROUND layer.
+        f.shadow = f.health:CreateTexture(nil, "BACKGROUND")
+        f.shadow:SetDrawLayer("BACKGROUND", -2)
+        f.shadow:SetAtlas(ATLAS_BAR_SHADOW)
+        f.shadow:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHADOW_OUTSET, SHADOW_OUTSET)
+        f.shadow:SetPoint("BOTTOMRIGHT", f.power, "BOTTOMRIGHT", SHADOW_OUTSET, -SHADOW_OUTSET)
+
+        -- Native "deselected" dimming overlay (BORDER sits above the fill but
+        -- below the OVERLAY-layer name/percent text).
+        f.dimHealth = f.health:CreateTexture(nil, "BORDER")
+        f.dimHealth:SetPoint("TOPLEFT", f.health, "TOPLEFT", 0, 1)
+        f.dimHealth:SetPoint("BOTTOMRIGHT", f.health, "BOTTOMRIGHT", 0, -1)
+        f.dimHealth:SetAtlas(ATLAS_BAR_DIM)
+        f.dimPower = f.power:CreateTexture(nil, "BORDER")
+        f.dimPower:SetPoint("TOPLEFT", f.power, "TOPLEFT", 0, 1)
+        f.dimPower:SetPoint("BOTTOMRIGHT", f.power, "BOTTOMRIGHT", 0, -1)
+        f.dimPower:SetAtlas(ATLAS_BAR_DIM)
 
         -- Aura row placeholder (flush under the frame; doesn't render itself,
         -- only reserves vertical space for the native AuraContainer from
@@ -317,7 +357,18 @@ function FrameBoss:RefreshFrame(f, unit)
     self.Auras.SetUnit(f, unit)
 end
 
+-- Native health color: UnitSelectionColor is the same source the native unit
+-- frames / nameplates use (hostile red, neutral yellow, tapped/dead gray).
+function FrameBoss:UpdateHealthColor(f, unit)
+    local r, g, b
+    if unit and UnitSelectionColor then r, g, b = UnitSelectionColor(unit) end
+    if not r then r, g, b = unpack(FALLBACK_HEALTH_COLOR) end
+    f.health:SetStatusBarColor(r, g, b)
+    f.hbg:SetVertexColor(r * BG_COLOR_FACTOR, g * BG_COLOR_FACTOR, b * BG_COLOR_FACTOR)
+end
+
 function FrameBoss:UpdateHealth(f, unit)
+    self:UpdateHealthColor(f, unit)
     -- hp/hpMax may be secret: pass straight to StatusBar; never arithmetic.
     local hp, hpMax = UnitHealth(unit), UnitHealthMax(unit)
     if isSecret(hpMax) then
@@ -351,25 +402,43 @@ function FrameBoss:UpdateHealth(f, unit)
     end
 end
 
+-- Keep the shadow wrapped around the visible bar block: health only when the
+-- power bar is hidden, health+power otherwise.
+function FrameBoss:UpdateShadow(f, powerVisible)
+    f.shadow:ClearAllPoints()
+    f.shadow:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHADOW_OUTSET, SHADOW_OUTSET)
+    local bottom = powerVisible and f.power or f.health
+    f.shadow:SetPoint("BOTTOMRIGHT", bottom, "BOTTOMRIGHT", SHADOW_OUTSET, -SHADOW_OUTSET)
+end
+
 function FrameBoss:UpdatePower(f, unit)
     if not self.db.profile.showPower then
         f.power:Hide()
+        f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
+        self:UpdateShadow(f, false)
         return
     end
     local power, powerMax = UnitPower(unit), UnitPowerMax(unit)
     local secret = isSecret(powerMax)
     if not secret and (not powerMax or powerMax <= 0) then
         f.power:Hide()
+        f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
+        self:UpdateShadow(f, false)
     else
         f.power:Show()
+        f.dimPower:Show()
         f:SetHeight(FRAME_H)
+        self:UpdateShadow(f, true)
         -- Pass through when secret; floor to max >= 1 for normal numbers.
         f.power:SetMinMaxValues(0, secret and powerMax or math.max(powerMax, 1))
         f.power:SetValue(power)
         local c = PowerBarColor[UnitPowerType(unit)] or PowerBarColor[0]
-        if c then f.power:SetStatusBarColor(c.r, c.g, c.b) end
+        if c then
+            f.power:SetStatusBarColor(c.r, c.g, c.b)
+            f.pbg:SetVertexColor(c.r * BG_COLOR_FACTOR, c.g * BG_COLOR_FACTOR, c.b * BG_COLOR_FACTOR)
+        end
     end
 end
 
@@ -402,10 +471,6 @@ function FrameBoss:RefreshAll()
 end
 
 function FrameBoss:ApplySettings()
-    local c = self.db.profile.healthColor
-    for i = 1, MAX_BOSS do
-        self.frames[i].health:SetStatusBarColor(c[1], c[2], c[3])
-    end
     self:ApplyMover()
     self:RefreshAll()
 end
@@ -433,17 +498,26 @@ function FrameBoss:FillTestFrame(f, i)
     local hp = 90 - i * 10
     f.health:SetMinMaxValues(0, 100)
     f.health:SetValue(hp)
+    -- No real unit in test mode; UnitSelectionColor("player") would be green.
+    self:UpdateHealthColor(f, nil)
     f.percent:SetText(string.format("%.2f%%", hp))
     if self.db.profile.showPower then
         f.power:Show()
+        f.dimPower:Show()
         f:SetHeight(FRAME_H)
+        self:UpdateShadow(f, true)
         f.power:SetMinMaxValues(0, 100)
         f.power:SetValue(60)
         local c = PowerBarColor[0]
-        if c then f.power:SetStatusBarColor(c.r, c.g, c.b) end
+        if c then
+            f.power:SetStatusBarColor(c.r, c.g, c.b)
+            f.pbg:SetVertexColor(c.r * BG_COLOR_FACTOR, c.g * BG_COLOR_FACTOR, c.b * BG_COLOR_FACTOR)
+        end
     else
         f.power:Hide()
+        f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
+        self:UpdateShadow(f, false)
     end
     self.Auras.ShowTest(f)
 end

@@ -36,19 +36,6 @@ function FrameBoss:SetupOptions()
                         get = function() return profile().showPower end,
                         set = function(_, v) profile().showPower = v; FrameBoss:RefreshAll() end,
                     },
-                    healthColor = {
-                        type = "color",
-                        name = L["OPT_HEALTH_COLOR"],
-                        order = 3,
-                        get = function()
-                            local c = profile().healthColor
-                            return c[1], c[2], c[3]
-                        end,
-                        set = function(_, r, g, b)
-                            profile().healthColor = { r, g, b }
-                            FrameBoss:ApplySettings()
-                        end,
-                    },
                     editHeader = { type = "header", name = L["OPT_HEADER_POSITION"], order = 10 },
                     editMode = {
                         type = "toggle",
