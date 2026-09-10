@@ -1,0 +1,52 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:
+#   git tag v1.0.1 && git push origin v1.0.1
+# The tag's version (without the leading "v") is passed to scripts/package.sh,
+# which stamps it into the TOC's ## Version: line inside the built zip.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the GitHub Release and upload assets
+
+jobs:
+  release:
+    name: Build zip & publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure zip/unzip
+        run: |
+          if ! command -v zip >/dev/null || ! command -v unzip >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zip unzip
+          fi
+
+      - name: Derive version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not a version tag (expected e.g. v1.0.1 or v1.0.1-rc.1)"
+            exit 1
+          fi
+          echo "tag=$TAG -> version=$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build addon zip
+        run: ./scripts/package.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FrameBoss ${{ steps.ver.outputs.version }}
+          files: dist/*.zip
+          generate_release_notes: true
+          # Prerelease tags (v1.0.1-rc.1, v1.0.1-beta.2, ...) are marked
+          # prerelease automatically by the action from the tag name.
