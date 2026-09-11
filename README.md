@@ -12,15 +12,16 @@ It replaces the default boss frames with up to five clean frames (<code>boss1</c
 ## Features
 
 - **Boss fights only** — driven by `INSTANCE_ENCOUNTER_ENGAGE_UNIT`; frames show on pull and hide automatically when the encounter ends
-- **Compact layout** — a circular 56×56 portrait, a large 32px health bar with 2-decimal percentage text (`Offline` / `Dead` states included), and a 24px power bar that colors itself by power type and auto-hides for bosses without power
-- **Native unit colors** — the health bar uses Blizzard's own `UnitSelectionColor` (hostile red, neutral yellow, tapped/dead gray), paired with the native nameplate look: a soft shadow behind the bars and the subtle "deselected" dimming overlay used on non-target nameplates
+- **Click to target** — each frame is a secure unit button: left-click targets the boss, right-click opens the native unit menu. Your current target gets a bright pulsing white outline, while every other frame keeps the native nameplate "deselected" dimming, so the targeted boss is obvious at a glance
+- **Compact layout** — no portrait: a large 32px health bar spanning the full frame width, with 2-decimal percentage text (`Offline` / `Dead` states included), and a 24px power bar that colors itself by power type and auto-hides for bosses without power. The bars sit inside a fitted dark backing shell
+- **Native unit colors** — the health bar uses Blizzard's own `UnitSelectionColor` (hostile red, neutral yellow, tapped/dead gray)
 - **Smart auras**, rendered through Blizzard's native AuraContainer so they keep working with the "secret" encounter values introduced in 12.x — cooldown sweeps, stack counts, type-colored borders, and tooltips are all handled by the engine:
   - **Stealable** (Spellsteal) and **enrage** (offensive dispel) boss buffs — enlarged 28×28 icons
   - Ordinary boss buffs — 24×24 icons
   - Only **your own debuffs** (including your pet/vehicle) — 24×24 icons
 - **Bilingual UI** — English (default) and Simplified Chinese, selected automatically from your client locale
 - **Settings panel** (`/fb`) — overall scale (60%–200%), power bar toggle, edit mode (unlock and drag), reset position, and AceDB profiles. Closing the panel automatically exits edit mode
-- **Test mode** — `/fb test` previews all five frames (including mock auras) anywhere in the world, making positioning easy
+- **Test mode** — `/fb test` previews all five frames (including mock auras) anywhere in the world, making positioning easy; it exits automatically when combat starts
 - **Standalone and lightweight** — built on native Blizzard APIs with Ace3 embedded; no ElvUI, WeakAuras, or all-in-one pack required
 
 ## Commands

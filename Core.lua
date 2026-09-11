@@ -1,7 +1,7 @@
 --[[
     FrameBoss - Core.lua
-    Minimalist boss frames: portrait / name / large health bar / power bar /
-    important buffs / player debuffs (no frame backdrop).
+    Minimalist boss frames: name / large health bar / power bar /
+    important buffs / player debuffs (no portrait, no frame backdrop).
     Pure Blizzard native API + Ace3 scaffolding; elements are flush (0 gap).
 --]]
 
@@ -17,38 +17,47 @@ local L = LibStub("AceLocale-3.0"):GetLocale("FrameBoss", true)
 -- UnitHealthPercent / UnitPowerPercent.
 local isSecret = issecretvalue or function() return false end
 
--- Layout constants: content hugs the edges, no padding; portrait is a 56x56
--- square to the left of the health/power bars.
+-- Layout constants: content hugs the edges, no padding and no portrait;
+-- the health/power bars span the full frame width.
 local FRAME_W    = 240
-local PORTRAIT_W = 56
-local PORTRAIT_H = 56
 local HEALTH_H   = 32
 local POWER_H    = 24
-local FRAME_H    = PORTRAIT_H                       -- 56 (matches portrait height when power bar visible)
+local FRAME_H    = HEALTH_H + POWER_H               -- 56 (health + power)
 local FRAME_H_NP = HEALTH_H                         -- 32 (no power bar)
-local BAR_X      = PORTRAIT_W                       -- 56
-local BAR_W      = FRAME_W - PORTRAIT_W             -- 184
-local GAP        = 0                                -- 0 (elements all flush)
+local BAR_W      = FRAME_W                          -- bars span the full width
 local AURA_ROW_H = 28                               -- 28 (height of the aura row placeholder; equals largest icon)
 local MAX_BOSS   = 5
 
 -- Native-style status bar texture (Blizzard's built-in glossy bar).
 local BAR_TEX    = "Interface\\TargetingFrame\\UI-StatusBar"
 
+local WHITE_TEX  = "Interface\\Buttons\\WHITE8X8"
+
 -- Bar background tracks reuse the bar's native color darkened by this factor.
 local BG_COLOR_FACTOR = 0.15
 -- Hostile-red fallback for test frames / when UnitSelectionColor is unavailable.
 local FALLBACK_HEALTH_COLOR = { 0.9, 0.2, 0.2 }
 
--- Native nameplate look (see Blizzard_NamePlates): a soft dark shadow frame
--- behind the bar, and a "deselected" overlay on top of the fill that Blizzard
--- uses to slightly darken every non-target bar. Both are stretched atlases.
-local ATLAS_BAR_SHADOW = "UI-HUD-CoolDownManager-Bar-BG"
-local ATLAS_BAR_DIM    = "ui-hud-nameplates-deselected-overlay"
-local SHADOW_OUTSET    = 3
+-- Dark backing shell behind the bar block: drawn by the addon (not a stretched
+-- atlas, whose baked-in art padding made the bars visually poke out of their
+-- wrapper), outset by this many pixels on every side with a 1px edge.
+local SHELL_OUTSET   = 2
+local SHELL_BG_ALPHA = 0.55
 
-FrameBoss.FRAME_W    = FRAME_W
-FrameBoss.PORTRAIT_W = PORTRAIT_W
+-- Target highlight: a bright pulsing outline in the same wrapper rect.
+local TARGET_EDGE    = 2
+
+-- Vertical gap between the bar block and the aura icons (and between an aura
+-- row and the next frame). The shell/target outline extends SHELL_OUTSET plus
+-- half the edge width (3px total) past the bars; icons must clear it.
+local AURA_GAP       = 4
+
+-- Native nameplate look (see Blizzard_NamePlates): a "deselected" overlay on
+-- top of the fill that Blizzard uses to slightly darken every non-target bar.
+local ATLAS_BAR_DIM    = "ui-hud-nameplates-deselected-overlay"
+
+FrameBoss.FRAME_W  = FRAME_W
+FrameBoss.AURA_GAP = AURA_GAP
 
 local DEFAULT_POINT = { "TOPLEFT", "UIParent", "TOPLEFT", 400, -300 }
 
@@ -155,10 +164,18 @@ function FrameBoss:RegisterEvents()
     self:RegisterEvent("UNIT_MAXPOWER", "UnitPower")
     self:RegisterEvent("UNIT_DISPLAYPOWER", "UnitPower")
     self:RegisterEvent("UNIT_NAME_UPDATE", "UnitName")
-    self:RegisterEvent("UNIT_PORTRAIT_UPDATE", "UnitPortrait")
     -- Faction / flags (tapped state) changes alter the native selection color.
     self:RegisterEvent("UNIT_FACTION", "UnitFaction")
     self:RegisterEvent("UNIT_FLAGS", "UnitFaction")
+    -- Keep the "current target" highlight in sync.
+    self:RegisterEvent("PLAYER_TARGET_CHANGED", "PlayerTargetChanged")
+    -- Visibility safety nets: INSTANCE_ENCOUNTER_ENGAGE_UNIT is the primary
+    -- show/hide driver, but boss tokens can clear later than the event
+    -- (death animation, world bosses, resets). Re-check on encounter end,
+    -- when combat drops, and again a few seconds after that.
+    self:RegisterEvent("ENCOUNTER_END", "RefreshAll")
+    self:RegisterEvent("PLAYER_REGEN_DISABLED", "CombatState")
+    self:RegisterEvent("PLAYER_REGEN_ENABLED", "CombatState")
     -- UNIT_AURA is intentionally NOT registered: the native AuraContainer
     -- refreshes its contents on its own.
 end
@@ -183,10 +200,25 @@ function FrameBoss:UnitName(event, unit)
     if f and UnitExists(unit) then f.name:SetText(UnitName(unit)) end
 end
 
-function FrameBoss:UnitPortrait(event, unit)
-    if self.db.profile.testMode then return end
-    local f = BossFrame(unit)
-    if f and UnitExists(unit) then SetPortraitTexture(f.portrait, unit) end
+function FrameBoss:PlayerTargetChanged()
+    self:UpdateTargeting()
+end
+
+-- Combat state: test frames are only for out-of-combat positioning, so end
+-- test/edit mode the instant combat starts; when combat ends, re-evaluate
+-- frame visibility and once more after a delay (boss tokens may outlive the
+-- disengage event during the death animation).
+function FrameBoss:CombatState(event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        if self.db.profile.testMode then
+            self:SetEditMode(false)
+        end
+    else
+        self:RefreshAll()
+        C_Timer.After(2.5, function()
+            if FrameBoss.db and FrameBoss.db.profile then FrameBoss:RefreshAll() end
+        end)
+    end
 end
 
 function FrameBoss:UnitFaction(event, unit)
@@ -199,13 +231,14 @@ end
 
 function FrameBoss:CreateMover()
     local mover = CreateFrame("Frame", "FrameBossAnchor", UIParent, "BackdropTemplate")
-    mover:SetSize(FRAME_W, MAX_BOSS * FRAME_H + (MAX_BOSS - 1) * GAP)
+    mover:SetSize(FRAME_W + 2 * SHELL_OUTSET,
+        MAX_BOSS * FRAME_H + (2 * MAX_BOSS - 1) * AURA_GAP + MAX_BOSS * AURA_ROW_H + 2 * SHELL_OUTSET)
     mover:SetClampedToScreen(true)
     mover:SetMovable(true)
     mover:EnableMouse(false)
     mover:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8X8",
-        edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1,
+        bgFile   = WHITE_TEX,
+        edgeFile = WHITE_TEX, edgeSize = 1,
     })
     mover.label = mover:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     mover.label:SetPoint("BOTTOMLEFT", mover, "TOPLEFT", 0, 4)
@@ -228,14 +261,21 @@ end
 function FrameBoss:ApplyMover()
     local db = self.db.profile
     local mover = self.mover
-    local stackH = MAX_BOSS * FRAME_H + (2 * MAX_BOSS - 1) * GAP + MAX_BOSS * AURA_ROW_H
-    mover:SetSize(FRAME_W, stackH)
+    local stackH = MAX_BOSS * FRAME_H + (2 * MAX_BOSS - 1) * AURA_GAP + MAX_BOSS * AURA_ROW_H + 2 * SHELL_OUTSET
+    mover:SetSize(FRAME_W + 2 * SHELL_OUTSET, stackH)
     mover:ClearAllPoints()
     mover:SetPoint(unpack(db.point))
     mover:SetScale(db.scale)
     local active = db.editMode
     mover:EnableMouse(active)
     mover:SetMovable(active)
+    if self.frames then
+        for i = 1, MAX_BOSS do
+            -- While unlocked, clicks should reach the mover for dragging
+            -- instead of targeting via the secure boss buttons.
+            self.frames[i]:EnableMouse(not active)
+        end
+    end
     if active then
         mover:RegisterForDrag("LeftButton")
         mover:SetBackdropColor(0, 0.4, 0, 0.35)
@@ -254,32 +294,43 @@ end
 function FrameBoss:CreateFrames()
     self.frames = {}
     for i = 1, MAX_BOSS do
-        -- Backdrop-less frame; square portrait on the left (56x56), health
-        -- and power bars flush against it on the right.
-        local f = CreateFrame("Frame", nil, self.mover)
+        -- Secure unit button (backdrop-less): left click targets the boss,
+        -- right click opens the native unit menu. Visibility stays driven by
+        -- the addon (no RegisterUnitWatch) so test mode can show frames that
+        -- have no real unit behind them.
+        local f = CreateFrame("Button", "FrameBossBossFrame" .. i, self.mover, "SecureUnitButtonTemplate")
         f:SetSize(FRAME_W, FRAME_H)
         if i == 1 then
-            f:SetPoint("TOPLEFT", self.mover, "TOPLEFT", 0, 0)
+            f:SetPoint("TOPLEFT", self.mover, "TOPLEFT", SHELL_OUTSET, -SHELL_OUTSET)
         else
-            f:SetPoint("TOPLEFT", self.frames[i - 1].auraRow, "BOTTOMLEFT", 0, -GAP)
+            f:SetPoint("TOPLEFT", self.frames[i - 1].auraRow, "BOTTOMLEFT", 0, -AURA_GAP)
         end
         f.bossIndex = i
         f.unit = "boss" .. i
 
-        -- Portrait (56x56): the client renders portraits as a circle with
-        -- black corners; mask the corners to alpha so the portrait shows
-        -- directly on a transparent background. No backdrop, no border.
-        f.portrait = f:CreateTexture(nil, "ARTWORK")
-        f.portrait:SetSize(PORTRAIT_W, PORTRAIT_H)
-        f.portrait:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
-        f.portrait:SetTexCoord(0, 1, 0, 1)
-        f.portrait:SetMask("Interface\\CharacterFrame\\TempPortraitAlphaMask")
+        f:SetAttribute("unit", f.unit)
+        f:SetAttribute("*type1", "target")
+        f:SetAttribute("*type2", "togglemenu")
+        f:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+        -- Dark backing shell around the bars. Created before the bars on
+        -- purpose: child frame levels rise in creation order, so this keeps
+        -- the shell's BACKGROUND layer below the per-bar track textures.
+        f.shell = CreateFrame("Frame", nil, f, "BackdropTemplate")
+        f.shell:EnableMouse(false)
+        f.shell:SetBackdrop({
+            bgFile   = WHITE_TEX,
+            edgeFile = WHITE_TEX, edgeSize = 1,
+        })
+        f.shell:SetBackdropColor(0, 0, 0, SHELL_BG_ALPHA)
+        f.shell:SetBackdropBorderColor(0, 0, 0, 0.9)
 
         -- Large health bar (height 32, flush against the top).
         f.health = CreateFrame("StatusBar", nil, f)
         f.health:SetSize(BAR_W, HEALTH_H)
-        f.health:SetPoint("TOPLEFT", f, "TOPLEFT", BAR_X, 0)
+        f.health:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
         f.health:SetStatusBarTexture(BAR_TEX)
+        f.health:EnableMouse(false)
         f.hbg = f.health:CreateTexture(nil, "BACKGROUND")
         f.hbg:SetAllPoints()
         f.hbg:SetTexture(BAR_TEX)
@@ -307,17 +358,10 @@ function FrameBoss:CreateFrames()
         f.power:SetSize(BAR_W, POWER_H)
         f.power:SetPoint("TOPLEFT", f.health, "BOTTOMLEFT", 0, 0)
         f.power:SetStatusBarTexture(BAR_TEX)
+        f.power:EnableMouse(false)
         f.pbg = f.power:CreateTexture(nil, "BACKGROUND")
         f.pbg:SetAllPoints()
         f.pbg:SetTexture(BAR_TEX)
-
-        -- One soft shadow frame wrapping both bars; subLevel puts it behind
-        -- the per-bar track textures at the same BACKGROUND layer.
-        f.shadow = f.health:CreateTexture(nil, "BACKGROUND")
-        f.shadow:SetDrawLayer("BACKGROUND", -2)
-        f.shadow:SetAtlas(ATLAS_BAR_SHADOW)
-        f.shadow:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHADOW_OUTSET, SHADOW_OUTSET)
-        f.shadow:SetPoint("BOTTOMRIGHT", f.power, "BOTTOMRIGHT", SHADOW_OUTSET, -SHADOW_OUTSET)
 
         -- Native "deselected" dimming overlay (BORDER sits above the fill but
         -- below the OVERLAY-layer name/percent text).
@@ -330,12 +374,35 @@ function FrameBoss:CreateFrames()
         f.dimPower:SetPoint("BOTTOMRIGHT", f.power, "BOTTOMRIGHT", 0, -1)
         f.dimPower:SetAtlas(ATLAS_BAR_DIM)
 
+        -- Current-target outline: a bright frame wrapped around the same
+        -- rect as the shell, with a soft alpha pulse to draw the eye.
+        -- Created after the bars so its BORDER edge draws above the dim
+        -- overlay but below the OVERLAY-layer text.
+        local target = CreateFrame("Frame", nil, f, "BackdropTemplate")
+        target:EnableMouse(false)
+        target:SetBackdrop({ edgeFile = WHITE_TEX, edgeSize = TARGET_EDGE })
+        target:SetBackdropBorderColor(1, 1, 1, 1)
+        target:Hide()
+        local pulse = target:CreateAnimationGroup()
+        local pulseAlpha = pulse:CreateAnimation("Alpha")
+        pulseAlpha:SetFromAlpha(1)
+        pulseAlpha:SetToAlpha(0.45)
+        pulseAlpha:SetDuration(0.75)
+        pulseAlpha:SetSmoothing("IN_OUT")
+        pulse:SetLooping("BOUNCE")
+        target.pulse = pulse
+        f.targetHolder = target
+
+        -- Wrap the default (health + power) block; re-wrapped dynamically
+        -- when the power bar hides.
+        self:UpdateChrome(f, true)
+
         -- Aura row placeholder (flush under the frame; doesn't render itself,
         -- only reserves vertical space for the native AuraContainer from
         -- Auras.lua).
         local row = CreateFrame("Frame", nil, f)
         row:SetSize(FRAME_W, AURA_ROW_H)
-        row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -GAP)
+        row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -AURA_GAP)
         f.auraRow = row
 
         -- Native aura container (creation fails in combat; Auras rebuilds it
@@ -350,7 +417,6 @@ end
 -- Data updates --------------------------------------------------------------
 
 function FrameBoss:RefreshFrame(f, unit)
-    SetPortraitTexture(f.portrait, unit)
     f.name:SetText(UnitName(unit))
     self:UpdateHealth(f, unit)
     self:UpdatePower(f, unit)
@@ -402,13 +468,43 @@ function FrameBoss:UpdateHealth(f, unit)
     end
 end
 
--- Keep the shadow wrapped around the visible bar block: health only when the
--- power bar is hidden, health+power otherwise.
-function FrameBoss:UpdateShadow(f, powerVisible)
-    f.shadow:ClearAllPoints()
-    f.shadow:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHADOW_OUTSET, SHADOW_OUTSET)
+-- Keep the shell and target outline wrapped around the visible bar block:
+-- health only when the power bar is hidden, health+power otherwise.
+function FrameBoss:UpdateChrome(f, powerVisible)
     local bottom = powerVisible and f.power or f.health
-    f.shadow:SetPoint("BOTTOMRIGHT", bottom, "BOTTOMRIGHT", SHADOW_OUTSET, -SHADOW_OUTSET)
+    f.shell:ClearAllPoints()
+    f.shell:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHELL_OUTSET, SHELL_OUTSET)
+    f.shell:SetPoint("BOTTOMRIGHT", bottom, "BOTTOMRIGHT", SHELL_OUTSET, -SHELL_OUTSET)
+    f.targetHolder:ClearAllPoints()
+    f.targetHolder:SetPoint("TOPLEFT", f.health, "TOPLEFT", -SHELL_OUTSET, SHELL_OUTSET)
+    f.targetHolder:SetPoint("BOTTOMRIGHT", bottom, "BOTTOMRIGHT", SHELL_OUTSET, -SHELL_OUTSET)
+end
+
+-- Current-target highlight: hide the native "deselected" dimming on the
+-- targeted boss and show the pulsing outline instead. Test mode has no real
+-- units, so it previews the highlight on the first frame.
+function FrameBoss:UpdateTargeting()
+    local test = self.db.profile.testMode
+    for i = 1, MAX_BOSS do
+        local f = self.frames[i]
+        local selected
+        if test then
+            selected = (i == 1)
+        else
+            selected = f:IsShown() and UnitIsUnit(f.unit, "target")
+        end
+        f.targetSelected = selected
+        f.dimHealth:SetShown(not selected)
+        f.dimPower:SetShown(not selected and f.power:IsShown())
+        f.targetHolder:SetShown(selected)
+        if selected then
+            if not f.targetHolder.pulse:IsPlaying() then
+                f.targetHolder.pulse:Play()
+            end
+        else
+            f.targetHolder.pulse:Stop()
+        end
+    end
 end
 
 function FrameBoss:UpdatePower(f, unit)
@@ -416,7 +512,7 @@ function FrameBoss:UpdatePower(f, unit)
         f.power:Hide()
         f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
-        self:UpdateShadow(f, false)
+        self:UpdateChrome(f, false)
         return
     end
     local power, powerMax = UnitPower(unit), UnitPowerMax(unit)
@@ -425,12 +521,12 @@ function FrameBoss:UpdatePower(f, unit)
         f.power:Hide()
         f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
-        self:UpdateShadow(f, false)
+        self:UpdateChrome(f, false)
     else
         f.power:Show()
-        f.dimPower:Show()
+        f.dimPower:SetShown(not f.targetSelected)
         f:SetHeight(FRAME_H)
-        self:UpdateShadow(f, true)
+        self:UpdateChrome(f, true)
         -- Pass through when secret; floor to max >= 1 for normal numbers.
         f.power:SetMinMaxValues(0, secret and powerMax or math.max(powerMax, 1))
         f.power:SetValue(power)
@@ -468,6 +564,7 @@ function FrameBoss:RefreshAll()
     if db.editMode then anyShown = true end
     self.mover:SetShown(anyShown)
     self:ApplyMover()
+    self:UpdateTargeting()
 end
 
 function FrameBoss:ApplySettings()
@@ -493,7 +590,6 @@ end
 -- Test mode fake data -------------------------------------------------------
 
 function FrameBoss:FillTestFrame(f, i)
-    SetPortraitTexture(f.portrait, "player")
     f.name:SetText(L["TEXT_TEST_BOSS"]:format(i))
     local hp = 90 - i * 10
     f.health:SetMinMaxValues(0, 100)
@@ -503,9 +599,9 @@ function FrameBoss:FillTestFrame(f, i)
     f.percent:SetText(string.format("%.2f%%", hp))
     if self.db.profile.showPower then
         f.power:Show()
-        f.dimPower:Show()
+        f.dimPower:SetShown(not f.targetSelected)
         f:SetHeight(FRAME_H)
-        self:UpdateShadow(f, true)
+        self:UpdateChrome(f, true)
         f.power:SetMinMaxValues(0, 100)
         f.power:SetValue(60)
         local c = PowerBarColor[0]
@@ -517,7 +613,7 @@ function FrameBoss:FillTestFrame(f, i)
         f.power:Hide()
         f.dimPower:Hide()
         f:SetHeight(FRAME_H_NP)
-        self:UpdateShadow(f, false)
+        self:UpdateChrome(f, false)
     end
     self.Auras.ShowTest(f)
 end

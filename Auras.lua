@@ -14,8 +14,7 @@
       Buff-Special container (left): HELPFUL and stealable / dispel (enrage)  28x28
       Buff-Regular container (mid-left): HELPFUL ordinary buffs              24x24
       Debuff container (right): HARMFUL|PLAYER -- only player (incl. pet/vehicle) applied  24x24
-    Buffs start at the portrait's right edge (x = portrait width), aligned
-    with the health/power bars.
+    Buffs start at the frame's left edge, aligned with the health/power bars.
 --]]
 
 local FrameBoss = LibStub("AceAddon-3.0"):GetAddon("FrameBoss")
@@ -25,18 +24,19 @@ FrameBoss.Auras = Auras
 local GetSpellTexture = C_Spell.GetSpellTexture  -- global GetSpellTexture was removed as of 11.0
 
 local FRAME_W    = FrameBoss.FRAME_W
-local PORTRAIT_W = FrameBoss.PORTRAIT_W
-local GAP = 0  -- icons hug each other; the aura row hugs the frame
+local GAP = 0       -- icons hug each other
+-- Icons clear the shell / target outline extending below the bars.
+local AURA_GAP = FrameBoss.AURA_GAP or 4
 
 -- Aura group sizes: dispel/stealable are larger, ordinary auras are smaller.
 local SIZE_BUFF_SPECIAL = 28  -- stealable / enrage
 local SIZE_BUFF_REGULAR = 24  -- ordinary HELPFUL
 local SIZE_DEBUFF       = 24  -- player-applied HARMFUL
 
--- Buffs begin where the portrait ends / the bars begin; buffs and debuffs
--- split the bar-width area evenly.
-local AURA_X = PORTRAIT_W
-local SIDE_W = math.floor((FRAME_W - PORTRAIT_W) / 2)
+-- Buffs begin at the left edge of the (portrait-less) frame; buffs and
+-- debuffs split the full bar width evenly.
+local AURA_X = 0
+local SIDE_W = math.floor(FRAME_W / 2)
 
 local DEBUFF_FILTER = "HARMFUL|PLAYER"
 
@@ -132,7 +132,7 @@ end
 
 -- Container construction (anchor/relAnchor pick the row edge; growH is the
 -- horizontal growth direction; xOff shifts the anchor, e.g. AURA_X to start
--- past the portrait).
+-- at the left edge).
 local function BuildContainer(f, anchor, relAnchor, growH, size, width, xOff)
     if InCombatLockdown() then return nil end  -- protected in combat; rebuilt after combat ends
     EnsureAuraLib()
@@ -147,7 +147,7 @@ local function BuildContainer(f, anchor, relAnchor, growH, size, width, xOff)
     c:SetEnabled(false)
     c:Hide()
     c:ClearAllPoints()
-    c:SetPoint(anchor, f, relAnchor, xOff or 0, -GAP)
+    c:SetPoint(anchor, f, relAnchor, xOff or 0, -AURA_GAP)
     c:SetSize(size, size)  -- container does not clip child frames; icons may extend outward
     c:SetFlowLayoutAxis(FlowAxisH)
     c:SetFlowLayoutAnchorPoint(anchor)
@@ -185,7 +185,7 @@ end
 function Auras.CreateContainers(f)
     if not f then return false end
     if not f.buffSpecial then
-        -- Stealable + Enrage (dispel) 28x28, starts at the portrait's right
+        -- Stealable + Enrage (dispel) 28x28, starts at the frame's left
         -- edge (aligned with the bars), grows right.
         local ok, c = pcall(BuildContainer, f, "TOPLEFT", "BOTTOMLEFT", FlowDir.Right, SIZE_BUFF_SPECIAL, SIDE_W, AURA_X)
         if ok and c then
@@ -320,7 +320,7 @@ function Auras.ShowTest(f)
 
     if not f.testRow then
         local row = CreateFrame("Frame", nil, f)
-        row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -GAP)
+        row:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -AURA_GAP)
         row.buttons = {}
         f.testRow = row
     end
@@ -337,7 +337,7 @@ function Auras.ShowTest(f)
     end
     local b1, b2, b3, b4 = row.buttons[1], row.buttons[2], row.buttons[3], row.buttons[4]
 
-    -- b1: stealable (28x28, starts at the portrait's right edge)
+    -- b1: stealable (28x28, starts at the frame's left edge)
     b1:SetSize(szSpec, szSpec)
     b1:ClearAllPoints()
     b1:SetPoint("TOPLEFT", row, "TOPLEFT", AURA_X, 0)
